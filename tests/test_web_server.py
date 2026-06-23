@@ -8,6 +8,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from bnct_tps_agent.skills import SkillRegistry
 from bnct_tps_agent.web_server import (
     AgentHTTPServer,
     ApplicationState,
@@ -132,6 +133,8 @@ class WebServerTests(unittest.TestCase):
         self.assertFalse(config["apiKeyConfigured"])
         self.assertIn("memory", config)
         self.assertEqual(config["memory"]["projectFile"], "CLAUDE.md")
+        self.assertIn("skills", config)
+        self.assertIn("dicom-tags", {item["name"] for item in config["skills"]})
         self.assertIn("README.md", files["files"])
 
     def test_session_endpoints_create_favorite_search_and_delete(self):
@@ -171,16 +174,27 @@ class WebServerTests(unittest.TestCase):
                     "encoding": "base64",
                     "content": content,
                 }
-            ]
+            ],
+            SkillRegistry(self.root),
         )
         self.assertEqual(stored[0]["kind"], "dicom")
+        self.assertEqual(stored[0]["skill"], "dicom-tags")
         self.assertGreater(stored[0]["tags"], 3)
         summary = prompt_attachments[0]["content"]
-        self.assertIn("DICOM 附件已由本地服务解析", summary)
+        self.assertIn("DICOM 附件已由 `dicom-tags` skill 解析", summary)
         self.assertIn("| (0008,0060) | Modality | CS | CT |", summary)
         self.assertIn("| (0010,0010) | PatientName | PN | [已脱敏] |", summary)
         self.assertNotIn("Wang^Test", summary)
         self.assertNotIn("PID123", summary)
+
+    def test_skill_registry_loads_and_reads_dicom_skill(self):
+        registry = SkillRegistry(self.root)
+        catalog = registry.public_catalog()
+        self.assertIn("dicom-tags", {item["name"] for item in catalog})
+        skill = registry.read_skill("dicom-tags")
+        self.assertIn("SKILL.md", skill["files"])
+        self.assertIn("scripts/parse_dicom.py", skill["files"])
+        self.assertIn("DICOM Tags", skill["content"])
 
     def test_running_server_is_detected_for_single_instance_launch(self):
         self.assertTrue(existing_server_is_healthy("127.0.0.1", self.server.server_address[1]))

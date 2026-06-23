@@ -8,22 +8,22 @@ from typing import Any
 LONG_VR = {"OB", "OD", "OF", "OL", "OW", "SQ", "UC", "UR", "UT", "UN"}
 STRING_VR = {"AE", "AS", "CS", "DA", "DS", "DT", "IS", "LO", "LT", "PN", "SH", "ST", "TM", "UI", "UR", "UT"}
 SENSITIVE_TAGS = {
-    (0x0008, 0x0050),  # Accession Number
-    (0x0008, 0x0080),  # Institution Name
-    (0x0008, 0x0090),  # Referring Physician Name
-    (0x0008, 0x1048),  # Physician(s) of Record
-    (0x0008, 0x1050),  # Performing Physician Name
-    (0x0008, 0x1070),  # Operators' Name
-    (0x0010, 0x0010),  # Patient Name
-    (0x0010, 0x0020),  # Patient ID
-    (0x0010, 0x0030),  # Patient Birth Date
-    (0x0010, 0x0032),  # Patient Birth Time
-    (0x0010, 0x0040),  # Patient Sex
-    (0x0010, 0x1010),  # Patient Age
-    (0x0010, 0x1000),  # Other Patient IDs
-    (0x0010, 0x1001),  # Other Patient Names
-    (0x0010, 0x2160),  # Ethnic Group
-    (0x0020, 0x0010),  # Study ID
+    (0x0008, 0x0050),
+    (0x0008, 0x0080),
+    (0x0008, 0x0090),
+    (0x0008, 0x1048),
+    (0x0008, 0x1050),
+    (0x0008, 0x1070),
+    (0x0010, 0x0010),
+    (0x0010, 0x0020),
+    (0x0010, 0x0030),
+    (0x0010, 0x0032),
+    (0x0010, 0x0040),
+    (0x0010, 0x1010),
+    (0x0010, 0x1000),
+    (0x0010, 0x1001),
+    (0x0010, 0x2160),
+    (0x0020, 0x0010),
 }
 
 
@@ -194,33 +194,30 @@ def _read_implicit(data: bytes, offset: int, endian: str) -> tuple[int, int, str
         return None
     group = _unpack(endian + "H", data[offset : offset + 2])
     element = _unpack(endian + "H", data[offset + 2 : offset + 4])
-    name, vr = _tag_name(group, element)
+    _name, vr = _tag_name(group, element)
     length = _unpack(endian + "I", data[offset + 4 : offset + 8])
     return group, element, vr, length, offset + 8
 
 
 def parse_dicom_tags(data: bytes, max_tags: int = 220) -> dict[str, Any]:
     if not data:
-        raise ValueError("DICOM 附件为空")
+        raise ValueError("DICOM attachment is empty")
     offset = 132 if looks_like_dicom(data) else 0
     tags: list[DataElement] = []
     transfer_syntax_uid = ""
     endian = "<"
     explicit = True
 
-    # File meta information is always Explicit VR Little Endian when present.
     while offset + 8 <= len(data):
         parsed = _read_explicit(data, offset, "<")
         if parsed is None:
             break
         group, element, vr, length, value_offset = parsed
-        if group != 0x0002:
-            break
-        if length == 0xFFFFFFFF or value_offset + length > len(data):
+        if group != 0x0002 or length == 0xFFFFFFFF or value_offset + length > len(data):
             break
         name, fallback_vr = _tag_name(group, element)
-        value = data[value_offset : value_offset + length]
         used_vr = vr if len(vr) == 2 and vr.isalpha() else fallback_vr
+        value = data[value_offset : value_offset + length]
         decoded = _decode_value(group, element, used_vr, value, "<")
         tags.append(DataElement(group, element, used_vr, name, length, decoded))
         if (group, element) == (0x0002, 0x0010):
@@ -260,26 +257,25 @@ def parse_dicom_tags(data: bytes, max_tags: int = 220) -> dict[str, Any]:
         offset = value_offset + length
 
     tag_dict = {item.tag: item for item in tags}
-    transfer_name = TRANSFER_SYNTAX_NAMES.get(transfer_syntax_uid, transfer_syntax_uid or "Unknown")
+    empty = DataElement(0, 0, "", "", 0, "")
     return {
-        "preamble": looks_like_dicom(data),
         "transferSyntaxUID": transfer_syntax_uid,
-        "transferSyntaxName": transfer_name,
+        "transferSyntaxName": TRANSFER_SYNTAX_NAMES.get(transfer_syntax_uid, transfer_syntax_uid or "Unknown"),
         "explicitVR": explicit,
         "littleEndian": endian == "<",
         "tagsParsed": len(tags),
         "truncated": len(tags) >= max_tags,
         "summary": {
-            "Modality": tag_dict.get("(0008,0060)", DataElement(0, 0, "", "", 0, "")).value,
-            "SOPClassUID": tag_dict.get("(0008,0016)", DataElement(0, 0, "", "", 0, "")).value,
-            "StudyDescription": tag_dict.get("(0008,1030)", DataElement(0, 0, "", "", 0, "")).value,
-            "SeriesDescription": tag_dict.get("(0008,103E)", DataElement(0, 0, "", "", 0, "")).value,
-            "Rows": tag_dict.get("(0028,0010)", DataElement(0, 0, "", "", 0, "")).value,
-            "Columns": tag_dict.get("(0028,0011)", DataElement(0, 0, "", "", 0, "")).value,
-            "PixelSpacing": tag_dict.get("(0028,0030)", DataElement(0, 0, "", "", 0, "")).value,
-            "SliceThickness": tag_dict.get("(0018,0050)", DataElement(0, 0, "", "", 0, "")).value,
-            "ImagePositionPatient": tag_dict.get("(0020,0032)", DataElement(0, 0, "", "", 0, "")).value,
-            "ImageOrientationPatient": tag_dict.get("(0020,0037)", DataElement(0, 0, "", "", 0, "")).value,
+            "Modality": tag_dict.get("(0008,0060)", empty).value,
+            "SOPClassUID": tag_dict.get("(0008,0016)", empty).value,
+            "StudyDescription": tag_dict.get("(0008,1030)", empty).value,
+            "SeriesDescription": tag_dict.get("(0008,103E)", empty).value,
+            "Rows": tag_dict.get("(0028,0010)", empty).value,
+            "Columns": tag_dict.get("(0028,0011)", empty).value,
+            "PixelSpacing": tag_dict.get("(0028,0030)", empty).value,
+            "SliceThickness": tag_dict.get("(0018,0050)", empty).value,
+            "ImagePositionPatient": tag_dict.get("(0020,0032)", empty).value,
+            "ImageOrientationPatient": tag_dict.get("(0020,0037)", empty).value,
         },
         "tags": [
             {
@@ -294,9 +290,13 @@ def parse_dicom_tags(data: bytes, max_tags: int = 220) -> dict[str, Any]:
     }
 
 
+def _escape_table(value: Any) -> str:
+    return str(value).replace("|", "\\|")
+
+
 def render_dicom_markdown(name: str, size: int, parsed: dict[str, Any]) -> str:
     lines = [
-        f"DICOM 附件已由本地服务解析：`{name}`",
+        f"DICOM 附件已由 `dicom-tags` skill 解析：`{name}`",
         "",
         f"- 文件大小：{size} bytes",
         f"- Transfer Syntax：{parsed['transferSyntaxName']}",
@@ -311,14 +311,35 @@ def render_dicom_markdown(name: str, size: int, parsed: dict[str, Any]) -> str:
     ]
     for key, value in parsed["summary"].items():
         if value:
-            lines.append(f"| {key} | {str(value).replace('|', '\\|')} |")
+            lines.append(f"| {key} | {_escape_table(value)} |")
     lines.extend(["", "## DICOM Tags", "", "| Tag | Name | VR | Value |", "| --- | --- | --- | --- |"])
     for item in parsed["tags"]:
-        value = str(item["value"]).replace("|", "\\|")
+        value = _escape_table(item["value"])
         if len(value) > 220:
             value = value[:220] + "..."
         lines.append(f"| {item['tag']} | {item['name']} | {item['vr']} | {value} |")
     if parsed.get("truncated"):
         lines.append("")
-        lines.append("> tag 列表达到本地解析上限，已截断。")
+        lines.append("> tag 列表达到 skill 解析上限，已截断。")
     return "\n".join(lines)
+
+
+def process_attachment(attachment: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any]:
+    data = attachment.get("data")
+    if not isinstance(data, (bytes, bytearray)):
+        raise ValueError("dicom-tags skill requires binary attachment data")
+    name = str(attachment.get("name") or "attachment.dcm")
+    original_size = int(attachment.get("original_size") or len(data))
+    parsed = parse_dicom_tags(bytes(data))
+    content = render_dicom_markdown(name, original_size, parsed)
+    return {
+        "kind": "dicom",
+        "content": content,
+        "stored": {
+            "kind": "dicom",
+            "tags": parsed["tagsParsed"],
+            "transferSyntax": parsed["transferSyntaxName"],
+            "uploadedBytes": len(data),
+            "originalSize": original_size,
+        },
+    }

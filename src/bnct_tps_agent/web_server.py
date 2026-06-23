@@ -20,13 +20,13 @@ from urllib.request import urlopen
 
 from .agent import AgentRuntime
 from .audit import AuditLogger
-from .dicom_tools import looks_like_dicom, parse_dicom_tags, render_dicom_markdown
 from .config import Settings
 from .memory import memory_summary, read_memory_context
 from .project_tools import list_project_files, read_project_text
 from .providers import get_provider, public_provider_configs
 from .safety import Risk, SafetyPolicy
 from .sessions import SessionStore
+from .skills import SkillRegistry
 from .tool_registry import ToolRegistry
 
 
@@ -37,16 +37,6 @@ MAX_ATTACHMENTS = 5
 MAX_ATTACHMENT_CHARS = 180_000
 MAX_TOTAL_ATTACHMENT_CHARS = 700_000
 MAX_BINARY_ATTACHMENT_BYTES = 1_500_000
-
-
-def attachment_is_dicom(name: str, media_type: str, data: bytes) -> bool:
-    lower_name = name.lower()
-    lower_type = media_type.lower()
-    return (
-        lower_name.endswith((".dcm", ".dicom"))
-        or lower_type in {"application/dicom", "application/x-dicom"}
-        or looks_like_dicom(data)
-    )
 
 
 def load_or_create_web_token(root: Path) -> str:
@@ -162,7 +152,7 @@ def approval_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def normalize_attachments(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def normalize_attachments(raw: Any, skill_registry: SkillRegistry | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if raw in (None, ""):
         return [], []
     if not isinstance(raw, list):
@@ -188,16 +178,24 @@ def normalize_attachments(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str
                 raise ValueError(f"{name} 不是合法的 base64 附件") from exc
             if len(binary) > MAX_BINARY_ATTACHMENT_BYTES:
                 raise ValueError(f"{name} 超过二进制附件上限")
-            if attachment_is_dicom(name, media_type, binary):
-                parsed = parse_dicom_tags(binary)
-                content = render_dicom_markdown(name, original_size, parsed)
-                kind = "dicom"
+            processed = None
+            if skill_registry is not None:
+                processed = skill_registry.process_attachment(
+                    {
+                        "name": name,
+                        "type": media_type,
+                        "size": size,
+                        "original_size": original_size,
+                        "data": binary,
+                    }
+                )
+            if processed is not None:
+                content = str(processed.get("content") or "")
+                kind = str(processed.get("kind") or "skill")
                 extra = {
                     "kind": kind,
-                    "tags": parsed["tagsParsed"],
-                    "transferSyntax": parsed["transferSyntaxName"],
-                    "uploadedBytes": len(binary),
-                    "originalSize": original_size,
+                    "skill": processed.get("skill"),
+                    **dict(processed.get("stored") or {}),
                 }
             else:
                 content = (
@@ -274,6 +272,7 @@ class ApplicationState:
         self.settings = Settings.load(root, interactive=True)
         self.sessions = SessionStore(self.settings.root)
         self.current_session_id = self.sessions.current_id()
+        self.skill_registry = SkillRegistry(self.settings.root)
         self._credentials: dict[str, str] = {}
         if self.settings.api_key:
             self._credentials[self.settings.provider] = self.settings.api_key
@@ -289,11 +288,13 @@ class ApplicationState:
                 self._event_id = 0
             self.audit = AuditLogger(self.settings.audit_dir)
             policy = SafetyPolicy(self._request_approval)
+            self.skill_registry = SkillRegistry(self.settings.root)
             self.registry = ToolRegistry(
                 self.settings.root,
                 policy,
                 self.audit,
                 event_callback=self.add_event,
+                skill_registry=self.skill_registry,
             )
             self.runtime = None
             if self.settings.api_key:
@@ -301,7 +302,14 @@ class ApplicationState:
                     self.settings,
                     self.registry,
                     self.audit,
-                    memory_context=read_memory_context(self.settings.root),
+                    memory_context="\n\n".join(
+                        part
+                        for part in (
+                            read_memory_context(self.settings.root),
+                            self.skill_registry.catalog_context(),
+                        )
+                        if part
+                    ),
                 )
 
     def add_event(self, event: dict[str, Any]) -> None:
@@ -328,6 +336,7 @@ class ApplicationState:
             "busy": self._chat_lock.locked(),
             "currentSessionId": self.current_session_id,
             "memory": memory_summary(self.settings.root),
+            "skills": self.skill_registry.public_catalog(),
         }
 
     def configure(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -416,7 +425,7 @@ class ApplicationState:
                 session = self.sessions.set_current(session_id)
                 self.current_session_id = str(session["id"])
                 self._rebuild_runtime(clear_events=True)
-            prompt_attachments, stored_attachments = normalize_attachments(attachments)
+            prompt_attachments, stored_attachments = normalize_attachments(attachments, self.skill_registry)
             history = self.sessions.recent_context(self.current_session_id)
             effective_task = build_task_prompt(task, history, prompt_attachments)
             self.sessions.add_message(self.current_session_id, "user", task, stored_attachments)

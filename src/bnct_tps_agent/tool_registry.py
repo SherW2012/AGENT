@@ -15,6 +15,7 @@ from .project_tools import (
     write_project_text,
 )
 from .safety import PolicyDenied, Risk, SafetyPolicy
+from .skills import SkillRegistry
 from .tps_tools import summarize_plan_snapshot, validate_plan_snapshot
 
 
@@ -57,11 +58,13 @@ class ToolRegistry:
         policy: SafetyPolicy,
         audit: AuditLogger,
         event_callback: EventCallback | None = None,
+        skill_registry: SkillRegistry | None = None,
     ):
         self.root = root
         self.policy = policy
         self.audit = audit
         self.event_callback = event_callback
+        self.skill_registry = skill_registry or SkillRegistry(root)
         self._tools = {tool.name: tool for tool in self._build_tools()}
 
     def _emit(self, event: dict[str, Any]) -> None:
@@ -131,6 +134,20 @@ class ToolRegistry:
                 },
                 Risk.WRITE,
                 append_agent_memory,
+            ),
+            Tool(
+                "list_agent_skills",
+                "List local skills discovered from skills/, .agent/skills/, and .claude/skills/.",
+                {**object_schema, "properties": {}, "required": []},
+                Risk.READ,
+                lambda _root: {"skills": self.skill_registry.public_catalog()},
+            ),
+            Tool(
+                "read_agent_skill",
+                "Read one local skill's SKILL.md and file list before using that skill.",
+                {**object_schema, "properties": {"name": {"type": "string"}}, "required": ["name"]},
+                Risk.READ,
+                lambda _root, name: self.skill_registry.read_skill(name),
             ),
             Tool(
                 "validate_plan_snapshot",

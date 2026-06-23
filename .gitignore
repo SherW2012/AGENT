@@ -4,6 +4,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .bnct_agent/
+.agent/
 dist/
 build/
 *.egg-info/
