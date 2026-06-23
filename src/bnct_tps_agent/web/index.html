@@ -3,138 +3,157 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light" />
     <title>BNCT TPS Agent</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <div class="app-shell">
-      <header class="topbar">
-        <div class="brand">
-          <div class="brand-mark" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M12 2.7 20.2 7.4v9.2L12 21.3l-8.2-4.7V7.4L12 2.7Z"/><path d="m8.4 9 3.6-2 3.6 2v4L12 15l-3.6-2V9Z"/></svg>
-          </div>
-          <div>
-            <div class="brand-title">BNCT TPS Agent</div>
-            <div class="brand-subtitle">Engineering workspace</div>
+      <aside class="session-sidebar" id="session-sidebar">
+        <div class="sidebar-top">
+          <button class="sidebar-toggle" id="sidebar-toggle" type="button" title="收起侧栏" aria-label="收起侧栏">
+            <svg viewBox="0 0 24 24"><path d="M15 6 9 12l6 6"/></svg>
+          </button>
+          <div class="brand">
+            <div class="brand-mark" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 2.7 20.2 7.4v9.2L12 21.3l-8.2-4.7V7.4L12 2.7Z"/><path d="m8.4 9 3.6-2 3.6 2v4L12 15l-3.6-2V9Z"/></svg>
+            </div>
+            <div class="brand-copy">
+              <div class="brand-title">BNCT TPS Agent</div>
+              <div class="brand-subtitle">Local workspace</div>
+            </div>
           </div>
         </div>
 
-        <div class="workspace-chip" id="workspace-chip" title="当前工程">
-          <span class="status-dot"></span>
-          <span id="workspace-name">Loading workspace</span>
+        <div class="sidebar-actions">
+          <button class="primary-nav-button" id="new-session-button" type="button">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+            <span>新建会话</span>
+          </button>
+          <button class="nav-button" id="settings-button" type="button">
+            <svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-1.42 1.42-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.55V20h-2v-.09a1.7 1.7 0 0 0-1.1-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06-1.42-1.42.06-.06A1.7 1.7 0 0 0 9.35 15a1.7 1.7 0 0 0-1.55-1.03H7.7v-2h.09a1.7 1.7 0 0 0 1.56-1.1A1.7 1.7 0 0 0 9 9l-.06-.06 1.42-1.42.06.06a1.7 1.7 0 0 0 1.88.34 1.7 1.7 0 0 0 1.03-1.55V6.3h2v.09a1.7 1.7 0 0 0 1.1 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 1.42 1.42-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.55 1.03h.09v2h-.09A1.7 1.7 0 0 0 19.4 15Z"/></svg>
+            <span>连接设置</span>
+          </button>
         </div>
 
-        <div class="top-actions">
+        <div class="session-search-wrap">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
+          <input id="session-search" type="search" placeholder="搜索会话" autocomplete="off" />
+        </div>
+
+        <div class="sidebar-section-title">
+          <span>会话</span>
+          <span class="count-badge" id="session-count">0</span>
+        </div>
+        <div class="session-list" id="session-list" aria-label="会话列表"></div>
+
+        <div class="sidebar-status">
           <div class="connection-state offline" id="connection-state">
             <span class="state-dot"></span>
             <span id="connection-label">离线模式</span>
           </div>
-          <button class="icon-button" id="new-session-button" type="button" title="新会话" aria-label="新会话">
-            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-          </button>
-          <button class="icon-button" id="settings-button" type="button" title="设置" aria-label="设置">
-            <svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-1.42 1.42-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.55V20h-2v-.09a1.7 1.7 0 0 0-1.1-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06-1.42-1.42.06-.06A1.7 1.7 0 0 0 9.35 15a1.7 1.7 0 0 0-1.55-1.03H7.7v-2h.09a1.7 1.7 0 0 0 1.56-1.1A1.7 1.7 0 0 0 9 9l-.06-.06 1.42-1.42.06.06a1.7 1.7 0 0 0 1.88.34 1.7 1.7 0 0 0 1.03-1.55V6.3h2v.09a1.7 1.7 0 0 0 1.1 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 1.42 1.42-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.55 1.03h.09v2h-.09A1.7 1.7 0 0 0 19.4 15Z"/></svg>
+          <div class="memory-pill" id="memory-pill" title="项目记忆">
+            <span>记忆</span>
+            <strong>CLAUDE.md</strong>
+          </div>
+        </div>
+      </aside>
+
+      <main class="conversation-panel">
+        <div class="mobile-sidebar-button">
+          <button class="icon-button" id="sidebar-expand-button" type="button" title="展开侧栏" aria-label="展开侧栏">
+            <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
           </button>
         </div>
-      </header>
 
-      <div class="workspace-layout">
-        <aside class="sidebar">
-          <section class="sidebar-section">
-            <div class="section-heading">
-              <span>工作区</span>
-              <span class="count-badge" id="file-count">0</span>
+        <div class="conversation-scroll" id="conversation-scroll">
+          <div class="empty-state" id="empty-state">
+            <div class="hero-mark" aria-hidden="true">
+              <svg viewBox="0 0 48 48"><path d="M24 4 41 14v20L24 44 7 34V14L24 4Z"/><path d="m16.5 18.5 7.5-4.2 7.5 4.2v9L24 31.7l-7.5-4.2v-9Z"/></svg>
             </div>
-            <div class="file-search-wrap">
-              <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
-              <input id="file-search" type="search" placeholder="搜索文件" autocomplete="off" />
+            <h1>今天想处理什么？</h1>
+            <p>阅读代码、分析日志、运行测试，或检查脱敏的 BNCT 计划快照。</p>
+            <div class="suggestion-grid">
+              <button type="button" data-task="浏览工程并总结剂量计算模块的调用链。">
+                <span>理解代码</span>
+                <small>总结剂量计算调用链</small>
+              </button>
+              <button type="button" data-task="检查当前工程的测试结构，找出明显缺失的边界测试。">
+                <span>检查测试</span>
+                <small>寻找边界覆盖缺口</small>
+              </button>
+              <button type="button" data-task="记住：我希望界面优先保持亮色、清爽、接近 Claude 的网页布局。">
+                <span>记住偏好</span>
+                <small>写入私有记忆需审批</small>
+              </button>
             </div>
-            <div class="file-list" id="file-list" aria-label="工程文件"></div>
-          </section>
-
-          <section class="quick-section">
-            <div class="section-heading"><span>快捷任务</span></div>
-            <button class="quick-action" type="button" data-task="分析当前工程结构，指出主要模块、入口和测试覆盖。">
-              <span class="quick-icon violet"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4z"/><path d="m8 10 2 2-2 2M12 14h4"/></svg></span>
-              <span><strong>分析工程</strong><small>模块与测试入口</small></span>
-            </button>
-            <button class="quick-action" id="snapshot-demo-button" type="button">
-              <span class="quick-icon amber"><svg viewBox="0 0 24 24"><path d="M5 3h14v18H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></span>
-              <span><strong>校验快照</strong><small>离线安全演示</small></span>
-            </button>
-          </section>
-
-          <div class="safety-card">
-            <div class="safety-title"><span class="shield">✓</span> Safety boundary</div>
-            <p>临床批准、处方修改与患者数据写回由本地策略硬性阻断。</p>
           </div>
-        </aside>
+          <div class="message-list" id="message-list" aria-live="polite"></div>
+        </div>
 
-        <main class="conversation-panel">
-          <div class="conversation-scroll" id="conversation-scroll">
-            <div class="empty-state" id="empty-state">
-              <div class="hero-mark" aria-hidden="true">
-                <svg viewBox="0 0 48 48"><path d="M24 4 41 14v20L24 44 7 34V14L24 4Z"/><path d="m16.5 18.5 7.5-4.2 7.5 4.2v9L24 31.7l-7.5-4.2v-9Z"/></svg>
+        <div class="composer-zone">
+          <div class="attachment-list hidden" id="attachment-list"></div>
+          <div class="composer" id="composer">
+            <textarea id="prompt-input" rows="1" placeholder="给 BNCT Agent 一个任务..." aria-label="任务输入"></textarea>
+            <div class="composer-footer">
+              <div class="composer-left">
+                <button class="attach-button" id="attach-button" type="button" aria-label="上传附件">
+                  <svg viewBox="0 0 24 24"><path d="m21 12.5-8.9 8.9a6 6 0 0 1-8.5-8.5l9.4-9.4a4 4 0 0 1 5.7 5.7L9.2 18.7a2 2 0 0 1-2.8-2.8l8.8-8.8"/></svg>
+                </button>
+                <input class="hidden" id="attachment-input" type="file" multiple />
+                <span class="model-pill" id="model-pill">未连接模型</span>
+                <span class="shortcut-hint">Shift + Enter 换行</span>
               </div>
-              <h1>今天想处理什么？</h1>
-              <p>阅读代码、分析日志、运行测试，或检查脱敏的 BNCT 计划快照。</p>
-              <div class="suggestion-grid">
-                <button type="button" data-task="浏览工程并总结剂量计算模块的调用链。">
-                  <span>理解代码</span>
-                  <small>总结剂量计算调用链</small>
-                </button>
-                <button type="button" data-task="检查当前工程的测试结构，找出明显缺失的边界测试。">
-                  <span>检查测试</span>
-                  <small>寻找边界覆盖缺口</small>
-                </button>
-                <button type="button" data-task="搜索 TODO 和 FIXME，并按风险给出处理顺序。">
-                  <span>整理任务</span>
-                  <small>归纳 TODO 与 FIXME</small>
-                </button>
-              </div>
+              <button class="send-button" id="send-button" type="button" aria-label="发送任务">
+                <svg viewBox="0 0 24 24"><path d="m5 12 7-7 7 7M12 5v14"/></svg>
+              </button>
             </div>
-            <div class="message-list" id="message-list" aria-live="polite"></div>
           </div>
+          <div class="medical-note">研发辅助工具，不构成医疗建议；所有输出必须由有资质人员复核。</div>
+        </div>
+      </main>
 
-          <div class="composer-zone">
-            <div class="composer" id="composer">
-              <textarea id="prompt-input" rows="1" placeholder="给 BNCT Agent 一个任务..." aria-label="任务输入"></textarea>
-              <div class="composer-footer">
-                <div class="composer-meta">
-                  <span class="model-pill" id="model-pill">未连接模型</span>
-                  <span>Shift + Enter 换行</span>
-                </div>
-                <button class="send-button" id="send-button" type="button" aria-label="发送任务">
-                  <svg viewBox="0 0 24 24"><path d="m5 12 7-7 7 7M12 5v14"/></svg>
-                </button>
-              </div>
-            </div>
-            <div class="medical-note">研发辅助工具，不构成医疗建议；所有输出必须由有资质人员复核。</div>
-          </div>
-        </main>
-
-        <aside class="activity-panel">
-          <div class="activity-header">
+      <aside class="workspace-panel">
+        <section class="workspace-card">
+          <div class="workspace-heading">
             <div>
-              <span class="eyebrow">LIVE TRACE</span>
-              <h2>Agent 活动</h2>
+              <span class="eyebrow">WORKSPACE</span>
+              <h2 id="workspace-name">Loading workspace</h2>
             </div>
-            <button class="tiny-button" id="clear-activity-button" type="button">清空</button>
+            <span class="count-badge" id="file-count">0</span>
           </div>
-          <div class="activity-list" id="activity-list">
-            <div class="activity-empty">
-              <div class="pulse-ring"></div>
-              <strong>等待任务</strong>
-              <span>工具调用与审批会显示在这里</span>
+          <div class="workspace-chip" id="workspace-chip" title="当前工程">
+            <span class="status-dot"></span>
+            <span id="workspace-path">正在读取工程目录</span>
+          </div>
+          <div class="file-search-wrap">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
+            <input id="file-search" type="search" placeholder="搜索文件" autocomplete="off" />
+          </div>
+          <div class="file-list" id="file-list" aria-label="工程文件"></div>
+        </section>
+
+        <section class="workspace-card compact">
+          <div class="workspace-heading">
+            <div>
+              <span class="eyebrow">QUICK TASKS</span>
+              <h2>快捷任务</h2>
             </div>
           </div>
-          <div class="trace-footer">
-            <span><i class="legend read"></i>只读自动允许</span>
-            <span><i class="legend approval"></i>写入需审批</span>
-          </div>
-        </aside>
-      </div>
+          <button class="quick-action" type="button" data-task="分析当前工程结构，指出主要模块、入口和测试覆盖。">
+            <span class="quick-icon violet"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4z"/><path d="m8 10 2 2-2 2M12 14h4"/></svg></span>
+            <span><strong>分析工程</strong><small>模块与测试入口</small></span>
+          </button>
+          <button class="quick-action" id="snapshot-demo-button" type="button">
+            <span class="quick-icon amber"><svg viewBox="0 0 24 24"><path d="M5 3h14v18H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></span>
+            <span><strong>校验快照</strong><small>离线安全演示</small></span>
+          </button>
+          <button class="quick-action" type="button" data-task="读取 CLAUDE.md 和本地私有记忆，帮我总结当前 agent 已经知道的工作习惯。">
+            <span class="quick-icon green"><svg viewBox="0 0 24 24"><path d="M6 4h12v16H6z"/><path d="M9 8h6M9 12h6M9 16h3"/></svg></span>
+            <span><strong>查看记忆</strong><small>CLAUDE.md 与私有记忆</small></span>
+          </button>
+        </section>
+      </aside>
     </div>
 
     <div class="drawer-backdrop hidden" id="preview-backdrop"></div>

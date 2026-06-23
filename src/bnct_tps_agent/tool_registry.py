@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .audit import AuditLogger, sha256_text
+from .memory import append_agent_memory, read_agent_memory
 from .project_tools import (
     list_project_files,
     read_project_text,
@@ -109,6 +110,27 @@ class ToolRegistry:
                 {**object_schema, "properties": {}, "required": []},
                 Risk.EXECUTE,
                 run_unit_tests,
+            ),
+            Tool(
+                "read_agent_memory",
+                "Read project CLAUDE.md plus the local private agent memory file.",
+                {**object_schema, "properties": {}, "required": []},
+                Risk.READ,
+                read_agent_memory,
+            ),
+            Tool(
+                "append_agent_memory",
+                "Append a stable user preference or workflow note to the local private memory file. Use only when the user explicitly asks you to remember something.",
+                {
+                    **object_schema,
+                    "properties": {
+                        "note": {"type": "string"},
+                        "category": {"type": "string"},
+                    },
+                    "required": ["note", "category"],
+                },
+                Risk.WRITE,
+                append_agent_memory,
             ),
             Tool(
                 "validate_plan_snapshot",

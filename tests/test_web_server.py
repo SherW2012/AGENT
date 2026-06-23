@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import unittest
+import base64
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -12,9 +13,45 @@ from bnct_tps_agent.web_server import (
     ApplicationState,
     acquire_instance_lock,
     approval_arguments,
+    build_task_prompt,
     existing_server_is_healthy,
     load_or_create_web_token,
+    normalize_attachments,
 )
+
+
+def explicit_element(group, element, vr, value):
+    if isinstance(value, str):
+        raw = value.encode("ascii")
+    else:
+        raw = value
+    if len(raw) % 2:
+        raw += b"\x00" if vr == "UI" else b" "
+    tag = group.to_bytes(2, "little") + element.to_bytes(2, "little")
+    if vr in {"OB", "OD", "OF", "OL", "OW", "SQ", "UC", "UR", "UT", "UN"}:
+        return tag + vr.encode("ascii") + b"\x00\x00" + len(raw).to_bytes(4, "little") + raw
+    return tag + vr.encode("ascii") + len(raw).to_bytes(2, "little") + raw
+
+
+def minimal_ct_dicom():
+    preamble = b"\x00" * 128 + b"DICM"
+    meta = b"".join(
+        [
+            explicit_element(0x0002, 0x0010, "UI", "1.2.840.10008.1.2.1"),
+            explicit_element(0x0002, 0x0002, "UI", "1.2.840.10008.5.1.4.1.1.2"),
+        ]
+    )
+    dataset = b"".join(
+        [
+            explicit_element(0x0008, 0x0060, "CS", "CT"),
+            explicit_element(0x0010, 0x0010, "PN", "Wang^Test"),
+            explicit_element(0x0010, 0x0020, "LO", "PID123"),
+            explicit_element(0x0028, 0x0010, "US", (512).to_bytes(2, "little")),
+            explicit_element(0x0028, 0x0011, "US", (256).to_bytes(2, "little")),
+            explicit_element(0x7FE0, 0x0010, "OW", b"\x00\x01\x02\x03"),
+        ]
+    )
+    return preamble + meta + dataset
 
 
 class WebServerTests(unittest.TestCase):
@@ -62,6 +99,11 @@ class WebServerTests(unittest.TestCase):
         self.assertIn("今天想处理什么", body)
         self.assertIn('<div class="file-preview" id="preview-content">', body)
         self.assertIn('id="browse-folder-button"', body)
+        self.assertIn('id="session-list"', body)
+        self.assertIn('id="attachment-input"', body)
+        self.assertIn("CLAUDE.md", body)
+        self.assertNotIn("Safety boundary", body)
+        self.assertNotIn("LIVE TRACE", body)
 
     def test_frontend_includes_safe_markdown_and_light_theme(self):
         with urlopen(self.base + "/app.js", timeout=5) as response:
@@ -74,6 +116,8 @@ class WebServerTests(unittest.TestCase):
         self.assertIn("color-scheme: light", styles)
         self.assertIn(".markdown-body strong", styles)
         self.assertIn("font-size: 15px", styles)
+        self.assertIn(".session-item", styles)
+        self.assertIn(".attachment-chip", styles)
 
     def test_api_requires_random_token(self):
         with self.assertRaises(HTTPError) as context:
@@ -86,7 +130,57 @@ class WebServerTests(unittest.TestCase):
         self.assertEqual(config["root"], str(self.root))
         self.assertEqual({item["id"] for item in config["providers"]}, {"openai", "deepseek", "kimi"})
         self.assertFalse(config["apiKeyConfigured"])
+        self.assertIn("memory", config)
+        self.assertEqual(config["memory"]["projectFile"], "CLAUDE.md")
         self.assertIn("README.md", files["files"])
+
+    def test_session_endpoints_create_favorite_search_and_delete(self):
+        created = self._post_json("/api/sessions", {})
+        session_id = created["session"]["id"]
+        self.assertEqual(created["config"]["currentSessionId"], session_id)
+
+        favored = self._post_json("/api/session/favorite", {"id": session_id, "favorite": True})
+        self.assertIn(session_id, {item["id"] for item in favored["sessions"]})
+        self.assertTrue(next(item for item in favored["sessions"] if item["id"] == session_id)["favorite"])
+
+        listed = self._json("/api/sessions?query=%E6%96%B0%E4%BC%9A%E8%AF%9D")
+        self.assertIn(session_id, {item["id"] for item in listed["sessions"]})
+
+        deleted = self._post_json("/api/session/delete", {"id": session_id})
+        self.assertNotEqual(deleted["config"]["currentSessionId"], session_id)
+
+    def test_attachment_prompt_builder_is_bounded_and_labeled(self):
+        prompt_attachments, stored = normalize_attachments(
+            [{"name": "notes.md", "type": "text/markdown", "size": 12, "content": "**hello**"}]
+        )
+        self.assertEqual(stored[0]["name"], "notes.md")
+        prompt = build_task_prompt("总结附件", "用户: 上一轮", prompt_attachments)
+        self.assertIn("当前会话最近上下文", prompt)
+        self.assertIn("附件 1: notes.md", prompt)
+        self.assertIn("用户当前任务", prompt)
+
+    def test_dicom_attachment_is_parsed_and_deidentified(self):
+        content = base64.b64encode(minimal_ct_dicom()).decode("ascii")
+        prompt_attachments, stored = normalize_attachments(
+            [
+                {
+                    "name": "ct.dcm",
+                    "type": "application/dicom",
+                    "size": len(content),
+                    "originalSize": 514000,
+                    "encoding": "base64",
+                    "content": content,
+                }
+            ]
+        )
+        self.assertEqual(stored[0]["kind"], "dicom")
+        self.assertGreater(stored[0]["tags"], 3)
+        summary = prompt_attachments[0]["content"]
+        self.assertIn("DICOM 附件已由本地服务解析", summary)
+        self.assertIn("| (0008,0060) | Modality | CS | CT |", summary)
+        self.assertIn("| (0010,0010) | PatientName | PN | [已脱敏] |", summary)
+        self.assertNotIn("Wang^Test", summary)
+        self.assertNotIn("PID123", summary)
 
     def test_running_server_is_detected_for_single_instance_launch(self):
         self.assertTrue(existing_server_is_healthy("127.0.0.1", self.server.server_address[1]))

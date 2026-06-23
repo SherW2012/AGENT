@@ -1,28 +1,37 @@
 "use strict";
 
 const token = new URLSearchParams(window.location.hash.slice(1)).get("token") || "";
+const MAX_ATTACHMENTS = 5;
+const MAX_ATTACHMENT_BYTES = 750_000;
+const MAX_DICOM_HEADER_BYTES = 1_500_000;
+const TEXT_ATTACHMENT_PATTERN = /\.(txt|md|json|csv|log|py|js|ts|tsx|html|css|xml|yaml|yml|toml|ini|cfg)$/i;
+const DICOM_ATTACHMENT_PATTERN = /\.(dcm|dicom)$/i;
 
 const state = {
   config: null,
   files: [],
-  lastEventId: 0,
+  sessions: [],
+  currentSessionId: null,
   currentApproval: null,
+  pendingAttachments: [],
   busy: false,
   eventTimer: null,
 };
 
 const elements = {
-  activityList: document.querySelector("#activity-list"),
+  appShell: document.querySelector(".app-shell"),
   allowApproval: document.querySelector("#allow-approval-button"),
   apiKey: document.querySelector("#api-key-input"),
   approvalArguments: document.querySelector("#approval-arguments"),
   approvalModal: document.querySelector("#approval-modal"),
   approvalRisk: document.querySelector("#approval-risk"),
   approvalTool: document.querySelector("#approval-tool"),
+  attachButton: document.querySelector("#attach-button"),
+  attachmentInput: document.querySelector("#attachment-input"),
+  attachmentList: document.querySelector("#attachment-list"),
   baseUrl: document.querySelector("#base-url-input"),
   browseFolder: document.querySelector("#browse-folder-button"),
   browseFolderLabel: document.querySelector("#browse-folder-label"),
-  clearActivity: document.querySelector("#clear-activity-button"),
   closePreview: document.querySelector("#close-preview-button"),
   connection: document.querySelector("#connection-state"),
   connectionLabel: document.querySelector("#connection-label"),
@@ -32,6 +41,7 @@ const elements = {
   fileCount: document.querySelector("#file-count"),
   fileList: document.querySelector("#file-list"),
   fileSearch: document.querySelector("#file-search"),
+  memoryPill: document.querySelector("#memory-pill"),
   messageList: document.querySelector("#message-list"),
   model: document.querySelector("#model-input"),
   modelOptions: document.querySelector("#provider-models"),
@@ -49,23 +59,35 @@ const elements = {
   providerKeyLink: document.querySelector("#provider-key-link"),
   root: document.querySelector("#root-input"),
   send: document.querySelector("#send-button"),
+  sessionCount: document.querySelector("#session-count"),
+  sessionList: document.querySelector("#session-list"),
+  sessionSearch: document.querySelector("#session-search"),
   settingsButton: document.querySelector("#settings-button"),
   settingsForm: document.querySelector("#settings-form"),
   settingsModal: document.querySelector("#settings-modal"),
+  sidebarExpand: document.querySelector("#sidebar-expand-button"),
+  sidebarToggle: document.querySelector("#sidebar-toggle"),
   snapshotDemo: document.querySelector("#snapshot-demo-button"),
   toastStack: document.querySelector("#toast-stack"),
+  workspaceChip: document.querySelector("#workspace-chip"),
   workspaceName: document.querySelector("#workspace-name"),
+  workspacePath: document.querySelector("#workspace-path"),
 };
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      "X-BNCT-Token": token,
-      ...(options.headers || {}),
-    },
-  });
+  let response;
+  try {
+    response = await fetch(path, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        "X-BNCT-Token": token,
+        ...(options.headers || {}),
+      },
+    });
+  } catch (error) {
+    throw new Error(`无法连接本地服务。若刚上传了附件，可能是文件过大或服务正在重启：${error.message}`);
+  }
   let payload = {};
   try {
     payload = await response.json();
@@ -99,6 +121,7 @@ function setBusy(busy) {
   state.busy = busy;
   elements.send.disabled = busy;
   elements.prompt.disabled = busy;
+  elements.attachButton.disabled = busy;
   if (busy) {
     setConnection("busy", "Agent 工作中");
   } else if (state.config?.apiKeyConfigured) {
@@ -110,10 +133,15 @@ function setBusy(busy) {
 
 function updateConfig(config) {
   state.config = config;
+  state.currentSessionId = config.currentSessionId || state.currentSessionId;
   const parts = config.root.replaceAll("\\", "/").split("/").filter(Boolean);
   elements.workspaceName.textContent = parts.at(-1) || config.root;
-  elements.workspaceName.parentElement.title = config.root;
+  elements.workspacePath.textContent = config.root;
+  elements.workspaceChip.title = config.root;
   elements.modelPill.textContent = config.apiKeyConfigured ? `${config.providerLabel} · ${config.model}` : "未连接模型";
+  if (config.memory) {
+    elements.memoryPill.title = `项目记忆：${config.memory.projectFile}\n本地记忆：${config.memory.localFile}`;
+  }
   elements.providerInputs.forEach((input) => { input.checked = input.value === config.provider; });
   syncProviderFields(config.provider, false);
   elements.model.value = config.model;
@@ -153,6 +181,10 @@ function hideEmptyState() {
   elements.emptyState.classList.add("hidden");
 }
 
+function showEmptyState() {
+  elements.emptyState.classList.remove("hidden");
+}
+
 function safeLinkUrl(value) {
   try {
     const url = new URL(value, window.location.href);
@@ -172,19 +204,19 @@ function renderInline(container, source) {
       return;
     }
     if (match.index > 0) container.append(document.createTextNode(remaining.slice(0, match.index)));
-    const token = match[0];
+    const tokenText = match[0];
     let element;
-    if (token.startsWith("`")) {
+    if (tokenText.startsWith("`")) {
       element = document.createElement("code");
-      element.textContent = token.slice(1, -1);
-    } else if (token.startsWith("**") || token.startsWith("__")) {
+      element.textContent = tokenText.slice(1, -1);
+    } else if (tokenText.startsWith("**") || tokenText.startsWith("__")) {
       element = document.createElement("strong");
-      renderInline(element, token.slice(2, -2));
-    } else if (token.startsWith("~~")) {
+      renderInline(element, tokenText.slice(2, -2));
+    } else if (tokenText.startsWith("~~")) {
       element = document.createElement("del");
-      renderInline(element, token.slice(2, -2));
-    } else if (token.startsWith("[")) {
-      const linkMatch = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+      renderInline(element, tokenText.slice(2, -2));
+    } else if (tokenText.startsWith("[")) {
+      const linkMatch = tokenText.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
       const href = linkMatch ? safeLinkUrl(linkMatch[2]) : null;
       if (href) {
         element = document.createElement("a");
@@ -193,14 +225,14 @@ function renderInline(container, source) {
         element.rel = "noreferrer noopener";
         renderInline(element, linkMatch[1]);
       } else {
-        element = document.createTextNode(linkMatch ? linkMatch[1] : token);
+        element = document.createTextNode(linkMatch ? linkMatch[1] : tokenText);
       }
     } else {
       element = document.createElement("em");
-      renderInline(element, token.slice(1, -1));
+      renderInline(element, tokenText.slice(1, -1));
     }
     container.append(element);
-    remaining = remaining.slice((match.index || 0) + token.length);
+    remaining = remaining.slice((match.index || 0) + tokenText.length);
   }
 }
 
@@ -332,6 +364,26 @@ function renderMarkdown(container, text) {
   }
 }
 
+function attachmentLabel(item) {
+  const size = Number(item.size || 0);
+  const kind = item.kind === "dicom" ? "DICOM" : item.kind === "binary" ? "Binary" : "Text";
+  const sizeText = size > 1024 ? `${Math.round(size / 1024)} KB` : `${size} B`;
+  return `${item.name || "附件"} · ${kind} · ${sizeText}`;
+}
+
+function renderMessageAttachments(container, attachments = []) {
+  if (!attachments.length) return;
+  const wrap = document.createElement("div");
+  wrap.className = "message-attachments";
+  attachments.forEach((item) => {
+    const chip = document.createElement("span");
+    chip.className = "message-attachment";
+    chip.textContent = attachmentLabel(item);
+    wrap.append(chip);
+  });
+  container.append(wrap);
+}
+
 function appendMessage(role, text, options = {}) {
   hideEmptyState();
   const article = document.createElement("article");
@@ -351,9 +403,12 @@ function appendMessage(role, text, options = {}) {
   content.className = "message-content";
   renderMarkdown(content, text);
   body.append(meta, content);
+  renderMessageAttachments(body, options.attachments || []);
   article.append(avatar, body);
   elements.messageList.append(article);
-  elements.conversation.scrollTo({ top: elements.conversation.scrollHeight, behavior: "smooth" });
+  if (options.scroll !== false) {
+    elements.conversation.scrollTo({ top: elements.conversation.scrollHeight, behavior: "smooth" });
+  }
   return article;
 }
 
@@ -385,34 +440,156 @@ function removeTyping() {
 
 function resizePrompt() {
   elements.prompt.style.height = "auto";
-  elements.prompt.style.height = `${Math.min(elements.prompt.scrollHeight, 170)}px`;
+  elements.prompt.style.height = `${Math.min(elements.prompt.scrollHeight, 190)}px`;
 }
 
-async function sendTask(prefilled = null) {
-  const task = String(prefilled ?? elements.prompt.value).trim();
-  if (!task || state.busy) return;
-  if (!state.config?.apiKeyConfigured) {
-    appendMessage("system", `需要先配置 ${state.config?.providerLabel || "模型供应商"} 的 API Key。请打开右上角设置，也可以切换到其他供应商。`);
-    openSettings();
+function renderSessionList() {
+  elements.sessionList.replaceChildren();
+  elements.sessionCount.textContent = String(state.sessions.length);
+  if (!state.sessions.length) {
+    const empty = document.createElement("div");
+    empty.className = "session-empty";
+    empty.textContent = "暂无会话";
+    elements.sessionList.append(empty);
     return;
   }
-  elements.prompt.value = "";
-  resizePrompt();
-  appendMessage("user", task);
-  appendTyping();
-  setBusy(true);
-  try {
-    const result = await api("/api/chat", {
-      method: "POST",
-      body: JSON.stringify({ task }),
+
+  state.sessions.forEach((session) => {
+    const item = document.createElement("button");
+    item.className = `session-item ${session.id === state.currentSessionId ? "active" : ""}`;
+    item.type = "button";
+    item.title = session.title;
+
+    const main = document.createElement("span");
+    main.className = "session-main";
+    const title = document.createElement("strong");
+    title.textContent = session.title || "未命名会话";
+    const preview = document.createElement("small");
+    preview.textContent = session.preview || session.displayTime || "";
+    main.append(title, preview);
+
+    const actions = document.createElement("span");
+    actions.className = "session-item-actions";
+    const favorite = document.createElement("button");
+    favorite.className = `session-mini-button ${session.favorite ? "favorited" : ""}`;
+    favorite.type = "button";
+    favorite.title = session.favorite ? "取消置顶" : "收藏置顶";
+    favorite.textContent = session.favorite ? "★" : "☆";
+    favorite.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setSessionFavorite(session.id, !session.favorite);
     });
-    removeTyping();
-    appendMessage("assistant", result.answer);
+    const remove = document.createElement("button");
+    remove.className = "session-mini-button";
+    remove.type = "button";
+    remove.title = "删除会话";
+    remove.textContent = "×";
+    remove.addEventListener("click", (event) => {
+      event.stopPropagation();
+      deleteSession(session.id, session.title);
+    });
+    actions.append(favorite, remove);
+
+    item.append(main, actions);
+    item.addEventListener("click", () => selectSession(session.id));
+    elements.sessionList.append(item);
+  });
+}
+
+async function loadSessions(query = elements.sessionSearch.value) {
+  const result = await api(`/api/sessions?query=${encodeURIComponent(query || "")}`);
+  state.sessions = result.sessions || [];
+  state.currentSessionId = result.currentSessionId || state.currentSessionId;
+  renderSessionList();
+}
+
+function renderConversation(session) {
+  state.currentSessionId = session.id;
+  elements.messageList.replaceChildren();
+  const messages = session.messages || [];
+  if (!messages.length) {
+    showEmptyState();
+  } else {
+    hideEmptyState();
+    messages.forEach((message) => {
+      appendMessage(message.role, message.content || "", {
+        id: message.id,
+        attachments: message.attachments || [],
+        scroll: false,
+      });
+    });
+    window.setTimeout(() => {
+      elements.conversation.scrollTo({ top: elements.conversation.scrollHeight });
+    }, 0);
+  }
+  renderSessionList();
+}
+
+async function loadCurrentSession(sessionId = state.currentSessionId) {
+  const query = sessionId ? `?id=${encodeURIComponent(sessionId)}` : "";
+  const result = await api(`/api/session${query}`);
+  state.currentSessionId = result.currentSessionId || result.session?.id;
+  renderConversation(result.session);
+}
+
+async function selectSession(sessionId) {
+  if (sessionId === state.currentSessionId || state.busy) return;
+  try {
+    const result = await api("/api/session/select", {
+      method: "POST",
+      body: JSON.stringify({ id: sessionId }),
+    });
+    updateConfig(result.config);
+    renderConversation(result.session);
+    await loadSessions();
   } catch (error) {
-    removeTyping();
-    appendMessage("system", `任务失败：${error.message}`);
-  } finally {
-    setBusy(false);
+    showToast(error.message, "error");
+  }
+}
+
+async function setSessionFavorite(sessionId, favorite) {
+  try {
+    const result = await api("/api/session/favorite", {
+      method: "POST",
+      body: JSON.stringify({ id: sessionId, favorite }),
+    });
+    state.sessions = result.sessions || [];
+    renderSessionList();
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+async function deleteSession(sessionId, title) {
+  if (!window.confirm(`删除会话「${title || "未命名会话"}」？`)) return;
+  try {
+    const result = await api("/api/session/delete", {
+      method: "POST",
+      body: JSON.stringify({ id: sessionId }),
+    });
+    updateConfig(result.config);
+    state.sessions = result.sessions || [];
+    renderSessionList();
+    await loadCurrentSession(result.currentSessionId);
+    showToast("会话已删除");
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+async function newSession() {
+  if (state.busy) {
+    showToast("当前任务仍在执行", "error");
+    return;
+  }
+  try {
+    const result = await api("/api/sessions", { method: "POST", body: "{}" });
+    updateConfig(result.config);
+    renderConversation(result.session);
+    await loadSessions();
+    showToast("已开始新会话");
+  } catch (error) {
+    showToast(error.message, "error");
   }
 }
 
@@ -420,7 +597,7 @@ function fileIcon(path) {
   const extension = path.includes(".") ? path.split(".").at(-1).toLowerCase() : "";
   if (["py", "js", "ts", "cpp", "cc", "c", "cs"].includes(extension)) return "◇";
   if (["json", "toml", "yaml", "yml", "xml"].includes(extension)) return "⌘";
-  if (["md", "txt"].includes(extension)) return "≡";
+  if (["md", "txt", "log", "csv"].includes(extension)) return "≡";
   return "·";
 }
 
@@ -486,48 +663,157 @@ function closePreview() {
   elements.previewDrawer.classList.add("hidden");
 }
 
-function traceDescription(event) {
-  const names = {
-    agent_started: ["Agent 开始处理", "正在分析任务并规划工具调用"],
-    agent_finished: ["Agent 已完成", "回答已返回到对话区"],
-    approval_required: [event.tool || "等待审批", `风险等级：${event.risk || "unknown"}`],
-    approval_resolved: [event.approved ? "操作已批准" : "操作已拒绝", event.tool || "受控工具"],
-    session_configured: ["连接已更新", event.model || "新模型设置"],
-    session_started: ["新会话", "上下文已清空"],
-    tool_started: [event.tool || "工具调用", `风险等级：${event.risk || "read"}`],
-    tool_finished: [event.tool || "工具完成", event.ok ? "执行成功" : `执行失败：${event.error_type || "unknown"}`],
-  };
-  return names[event.type] || [event.type || "活动", ""];
+function renderPendingAttachments() {
+  elements.attachmentList.replaceChildren();
+  elements.attachmentList.classList.toggle("hidden", state.pendingAttachments.length === 0);
+  state.pendingAttachments.forEach((item, index) => {
+    const chip = document.createElement("span");
+    chip.className = "attachment-chip";
+    const label = document.createElement("span");
+    label.textContent = attachmentLabel(item);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "×";
+    remove.title = "移除附件";
+    remove.addEventListener("click", () => {
+      state.pendingAttachments.splice(index, 1);
+      renderPendingAttachments();
+    });
+    chip.append(label, remove);
+    elements.attachmentList.append(chip);
+  });
 }
 
-function appendTrace(event) {
-  elements.activityList.querySelector(".activity-empty")?.remove();
-  const [title, description] = traceDescription(event);
-  const item = document.createElement("div");
-  let tone = "";
-  if (event.type === "tool_finished") tone = event.ok ? "success" : "error";
-  if (event.type?.includes("approval")) tone = "warning";
-  if (event.type === "agent_finished") tone = "success";
-  item.className = `trace-event ${tone}`;
-  const timestamp = document.createElement("span");
-  timestamp.className = "trace-time";
-  timestamp.textContent = event.timestamp || "now";
-  const strong = document.createElement("strong");
-  strong.textContent = title;
-  const p = document.createElement("p");
-  p.textContent = description;
-  item.append(timestamp, strong, p);
-  elements.activityList.append(item);
-  elements.activityList.scrollTo({ top: elements.activityList.scrollHeight, behavior: "smooth" });
+async function addAttachments(files) {
+  const selected = Array.from(files || []);
+  if (state.pendingAttachments.length + selected.length > MAX_ATTACHMENTS) {
+    showToast(`一次最多上传 ${MAX_ATTACHMENTS} 个附件`, "error");
+    return;
+  }
+  for (const file of selected) {
+    try {
+      const attachment = await readAttachment(file);
+      state.pendingAttachments.push(attachment);
+    } catch (_error) {
+      showToast(`${file.name} 无法读取：${_error.message}`, "error");
+    }
+  }
+  elements.attachmentInput.value = "";
+  renderPendingAttachments();
+}
+
+function isDicomFile(file) {
+  return DICOM_ATTACHMENT_PATTERN.test(file.name) || ["application/dicom", "application/x-dicom"].includes(file.type);
+}
+
+function isTextFile(file) {
+  return file.type.startsWith("text/") || TEXT_ATTACHMENT_PATTERN.test(file.name);
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return window.btoa(binary);
+}
+
+async function readAttachment(file) {
+  if (isDicomFile(file)) {
+    const slice = file.slice(0, Math.min(file.size, MAX_DICOM_HEADER_BYTES));
+    const content = arrayBufferToBase64(await slice.arrayBuffer());
+    return {
+      name: file.name,
+      type: file.type || "application/dicom",
+      size: slice.size,
+      originalSize: file.size,
+      encoding: "base64",
+      kind: "dicom",
+      content,
+    };
+  }
+  if (isTextFile(file)) {
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      throw new Error(`文本附件超过 ${Math.round(MAX_ATTACHMENT_BYTES / 1024)} KB`);
+    }
+    return {
+      name: file.name,
+      type: file.type || "text/plain",
+      size: file.size,
+      encoding: "text",
+      kind: "text",
+      content: await file.text(),
+    };
+  }
+  if (file.size > MAX_ATTACHMENT_BYTES) {
+    throw new Error(`二进制附件超过 ${Math.round(MAX_ATTACHMENT_BYTES / 1024)} KB`);
+  }
+  return {
+    name: file.name,
+    type: file.type || "application/octet-stream",
+    size: file.size,
+    originalSize: file.size,
+    encoding: "base64",
+    kind: "binary",
+    content: arrayBufferToBase64(await file.arrayBuffer()),
+  };
+}
+
+function storedAttachmentMetadata(items) {
+  return items.map((item) => ({
+    name: item.name,
+    type: item.type,
+    size: item.originalSize || item.size,
+    chars: String(item.content || "").length,
+    kind: item.kind || "text",
+  }));
+}
+
+async function sendTask(prefilled = null) {
+  const task = String(prefilled ?? elements.prompt.value).trim();
+  if (!task || state.busy) return;
+  if (!state.config?.apiKeyConfigured) {
+    appendMessage("system", `需要先配置 ${state.config?.providerLabel || "模型供应商"} 的 API Key。请打开左侧连接设置，也可以切换到其他供应商。`);
+    openSettings();
+    return;
+  }
+  const attachments = [...state.pendingAttachments];
+  const attachmentMetadata = storedAttachmentMetadata(attachments);
+  state.pendingAttachments = [];
+  renderPendingAttachments();
+  elements.prompt.value = "";
+  resizePrompt();
+  appendMessage("user", task, { attachments: attachmentMetadata });
+  appendTyping();
+  setBusy(true);
+  try {
+    const result = await api("/api/chat", {
+      method: "POST",
+      body: JSON.stringify({
+        sessionId: state.currentSessionId,
+        task,
+        attachments,
+      }),
+    });
+    removeTyping();
+    appendMessage("assistant", result.answer);
+    if (result.session) {
+      state.currentSessionId = result.session.id;
+    }
+    await loadSessions();
+  } catch (error) {
+    removeTyping();
+    appendMessage("system", `任务失败：${error.message}`);
+  } finally {
+    setBusy(false);
+  }
 }
 
 async function pollEvents() {
   try {
-    const result = await api(`/api/events?since=${state.lastEventId}`);
-    for (const event of result.events || []) {
-      state.lastEventId = Math.max(state.lastEventId, Number(event.id) || 0);
-      appendTrace(event);
-    }
     await pollApprovals();
   } catch (_error) {
     // The server can be briefly unavailable while restarting. The next poll retries.
@@ -592,6 +878,8 @@ async function saveSettings(event) {
     updateConfig(config);
     closeSettings();
     await loadFiles();
+    await loadSessions();
+    await loadCurrentSession(config.currentSessionId);
     appendMessage("system", "连接设置已更新。API Key 仅保存在当前本机进程内。关闭服务后需要重新输入。 ");
     showToast("连接设置已保存");
   } catch (error) {
@@ -623,24 +911,6 @@ async function pickProjectFolder() {
   }
 }
 
-async function newSession() {
-  if (state.busy) {
-    showToast("当前任务仍在执行", "error");
-    return;
-  }
-  try {
-    const config = await api("/api/new-session", { method: "POST", body: "{}" });
-    updateConfig(config);
-    state.lastEventId = 0;
-    elements.messageList.replaceChildren();
-    elements.emptyState.classList.remove("hidden");
-    elements.activityList.innerHTML = '<div class="activity-empty"><div class="pulse-ring"></div><strong>等待任务</strong><span>工具调用与审批会显示在这里</span></div>';
-    showToast("已开始新会话");
-  } catch (error) {
-    showToast(error.message, "error");
-  }
-}
-
 async function offlineDemo() {
   if (state.busy) return;
   setBusy(true);
@@ -658,6 +928,10 @@ async function offlineDemo() {
   }
 }
 
+function toggleSidebar(collapsed) {
+  elements.appShell.classList.toggle("sidebar-collapsed", collapsed);
+}
+
 function bindEvents() {
   elements.send.addEventListener("click", () => sendTask());
   elements.prompt.addEventListener("input", resizePrompt);
@@ -667,7 +941,10 @@ function bindEvents() {
       sendTask();
     }
   });
+  elements.attachButton.addEventListener("click", () => elements.attachmentInput.click());
+  elements.attachmentInput.addEventListener("change", () => addAttachments(elements.attachmentInput.files));
   elements.fileSearch.addEventListener("input", () => renderFiles(elements.fileSearch.value));
+  elements.sessionSearch.addEventListener("input", () => loadSessions(elements.sessionSearch.value));
   elements.settingsButton.addEventListener("click", openSettings);
   elements.browseFolder.addEventListener("click", pickProjectFolder);
   elements.providerInputs.forEach((input) => input.addEventListener("change", () => {
@@ -677,11 +954,12 @@ function bindEvents() {
   document.querySelectorAll(".close-modal").forEach((button) => button.addEventListener("click", closeSettings));
   elements.newSession.addEventListener("click", newSession);
   elements.snapshotDemo.addEventListener("click", offlineDemo);
-  elements.clearActivity.addEventListener("click", () => elements.activityList.replaceChildren());
   elements.closePreview.addEventListener("click", closePreview);
   elements.previewBackdrop.addEventListener("click", closePreview);
   elements.allowApproval.addEventListener("click", () => resolveApproval(true));
   elements.denyApproval.addEventListener("click", () => resolveApproval(false));
+  elements.sidebarToggle.addEventListener("click", () => toggleSidebar(true));
+  elements.sidebarExpand.addEventListener("click", () => toggleSidebar(false));
   document.querySelectorAll("[data-task]").forEach((button) => {
     button.addEventListener("click", () => sendTask(button.dataset.task));
   });
@@ -703,7 +981,8 @@ async function initialize() {
   try {
     const config = await api("/api/config");
     updateConfig(config);
-    await loadFiles();
+    await Promise.all([loadFiles(), loadSessions()]);
+    await loadCurrentSession(config.currentSessionId);
     state.eventTimer = window.setInterval(pollEvents, 650);
     pollEvents();
   } catch (error) {
