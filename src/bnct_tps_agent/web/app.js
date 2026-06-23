@@ -10,6 +10,7 @@ const DICOM_ATTACHMENT_PATTERN = /\.(dcm|dicom)$/i;
 const state = {
   config: null,
   files: [],
+  skills: [],
   sessions: [],
   currentSessionId: null,
   currentApproval: null,
@@ -41,6 +42,7 @@ const elements = {
   fileCount: document.querySelector("#file-count"),
   fileList: document.querySelector("#file-list"),
   fileSearch: document.querySelector("#file-search"),
+  importSkill: document.querySelector("#import-skill-button"),
   memoryPill: document.querySelector("#memory-pill"),
   messageList: document.querySelector("#message-list"),
   model: document.querySelector("#model-input"),
@@ -67,11 +69,13 @@ const elements = {
   settingsModal: document.querySelector("#settings-modal"),
   sidebarExpand: document.querySelector("#sidebar-expand-button"),
   sidebarToggle: document.querySelector("#sidebar-toggle"),
-  snapshotDemo: document.querySelector("#snapshot-demo-button"),
+  skillCount: document.querySelector("#skill-count"),
+  skillList: document.querySelector("#skill-list"),
   toastStack: document.querySelector("#toast-stack"),
   workspaceChip: document.querySelector("#workspace-chip"),
   workspaceName: document.querySelector("#workspace-name"),
   workspacePath: document.querySelector("#workspace-path"),
+  workspaceSwitch: document.querySelector("#workspace-switch-button"),
 };
 
 async function api(path, options = {}) {
@@ -133,6 +137,7 @@ function setBusy(busy) {
 
 function updateConfig(config) {
   state.config = config;
+  state.skills = config.skills || [];
   state.currentSessionId = config.currentSessionId || state.currentSessionId;
   const parts = config.root.replaceAll("\\", "/").split("/").filter(Boolean);
   elements.workspaceName.textContent = parts.at(-1) || config.root;
@@ -147,6 +152,7 @@ function updateConfig(config) {
   elements.model.value = config.model;
   elements.baseUrl.value = config.baseUrl || "";
   elements.root.value = config.root;
+  renderSkills();
   setBusy(Boolean(config.busy));
 }
 
@@ -624,6 +630,51 @@ function renderFiles(filter = "") {
   elements.fileCount.textContent = String(matching.length);
 }
 
+function skillTone(skill, index) {
+  if (skill.hasProcessor) return "amber";
+  if (skill.trusted) return "green";
+  return ["violet", "green", "accent", "red"][index % 4];
+}
+
+function skillInitial(skill) {
+  const name = String(skill.displayName || skill.name || "?").trim();
+  return (name[0] || "?").toUpperCase();
+}
+
+function renderSkills() {
+  elements.skillList.replaceChildren();
+  const skills = state.skills || [];
+  elements.skillCount.textContent = String(skills.length);
+  if (!skills.length) {
+    const empty = document.createElement("div");
+    empty.className = "session-empty";
+    empty.textContent = "暂无 skill";
+    elements.skillList.append(empty);
+    return;
+  }
+  skills.forEach((skill, index) => {
+    const button = document.createElement("button");
+    button.className = "skill-action";
+    button.type = "button";
+    button.title = `${skill.name}\n${skill.description || ""}`;
+    const icon = document.createElement("span");
+    icon.className = `skill-icon ${skillTone(skill, index)}`;
+    icon.textContent = skillInitial(skill);
+    const copy = document.createElement("span");
+    const title = document.createElement("strong");
+    title.textContent = skill.displayName || skill.name;
+    const subtitle = document.createElement("small");
+    subtitle.textContent = skill.shortDescription || skill.description || skill.path;
+    copy.append(title, subtitle);
+    button.append(icon, copy);
+    button.addEventListener("click", () => {
+      const prompt = skill.defaultPrompt || `请读取并使用 ${skill.name} skill 处理当前任务。`;
+      sendTask(prompt);
+    });
+    elements.skillList.append(button);
+  });
+}
+
 async function loadFiles() {
   try {
     const result = await api("/api/files?limit=600");
@@ -911,6 +962,66 @@ async function pickProjectFolder() {
   }
 }
 
+async function switchWorkspaceFolder() {
+  if (state.busy) {
+    showToast("当前任务仍在执行，请稍后切换工作目录", "error");
+    return;
+  }
+  if (!state.config) return;
+  elements.workspaceSwitch.disabled = true;
+  try {
+    const picked = await api("/api/pick-folder", {
+      method: "POST",
+      body: JSON.stringify({ initial: state.config.root, title: "切换 BNCT Agent 工作目录" }),
+    });
+    if (!picked.path) return;
+    const config = await api("/api/config", {
+      method: "POST",
+      body: JSON.stringify({
+        provider: state.config.provider,
+        model: state.config.model,
+        baseUrl: state.config.baseUrl || "",
+        apiKey: "",
+        root: picked.path,
+      }),
+    });
+    updateConfig(config);
+    await loadFiles();
+    await loadSessions();
+    await loadCurrentSession(config.currentSessionId);
+    appendMessage("system", `工作目录已切换到：\`${picked.path}\``);
+    showToast("工作目录已切换");
+  } catch (error) {
+    showToast(error.message, "error");
+  } finally {
+    elements.workspaceSwitch.disabled = false;
+  }
+}
+
+async function importSkill() {
+  if (state.busy) {
+    showToast("当前任务仍在执行，请稍后导入 skill", "error");
+    return;
+  }
+  elements.importSkill.disabled = true;
+  try {
+    const result = await api("/api/import-skill", {
+      method: "POST",
+      body: JSON.stringify({ initial: state.config?.root || "" }),
+    });
+    if (result.cancelled) {
+      showToast("已取消导入");
+      return;
+    }
+    updateConfig(result.config);
+    showToast(`已导入 skill：${result.skill.name}`);
+  } catch (error) {
+    showToast(error.message, "error");
+  } finally {
+    elements.importSkill.disabled = false;
+  }
+}
+
 async function offlineDemo() {
   if (state.busy) return;
   setBusy(true);
@@ -953,7 +1064,8 @@ function bindEvents() {
   elements.settingsForm.addEventListener("submit", saveSettings);
   document.querySelectorAll(".close-modal").forEach((button) => button.addEventListener("click", closeSettings));
   elements.newSession.addEventListener("click", newSession);
-  elements.snapshotDemo.addEventListener("click", offlineDemo);
+  elements.importSkill.addEventListener("click", importSkill);
+  elements.workspaceSwitch.addEventListener("click", switchWorkspaceFolder);
   elements.closePreview.addEventListener("click", closePreview);
   elements.previewBackdrop.addEventListener("click", closePreview);
   elements.allowApproval.addEventListener("click", () => resolveApproval(true));

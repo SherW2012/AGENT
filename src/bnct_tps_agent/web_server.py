@@ -96,7 +96,7 @@ def acquire_instance_lock(root: Path) -> BinaryIO | None:
     return handle
 
 
-def choose_project_folder(initial: str | Path) -> str | None:
+def choose_project_folder(initial: str | Path, title: str = "选择 BNCT Agent 工程目录") -> str | None:
     window = None
     try:
         import tkinter as tk
@@ -113,7 +113,7 @@ def choose_project_folder(initial: str | Path) -> str | None:
         window.update()
         selected = filedialog.askdirectory(
             parent=window,
-            title="选择 BNCT Agent 工程目录",
+            title=title,
             initialdir=str(initial_dir),
             mustexist=True,
         )
@@ -338,6 +338,14 @@ class ApplicationState:
             "memory": memory_summary(self.settings.root),
             "skills": self.skill_registry.public_catalog(),
         }
+
+    def import_skill(self, source: str) -> dict[str, Any]:
+        if self._chat_lock.locked():
+            raise RuntimeError("当前任务仍在执行，请稍后再导入 skill")
+        skill = self.skill_registry.import_skill(source)
+        self._rebuild_runtime(clear_events=False)
+        self.add_event({"type": "skill_imported", "skill": skill["name"]})
+        return {"skill": skill, "config": self.config()}
 
     def configure(self, payload: dict[str, Any]) -> dict[str, Any]:
         if self._chat_lock.locked():
@@ -624,8 +632,22 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/config":
                 self._send_json(self.server.state.configure(payload))
             elif parsed.path == "/api/pick-folder":
-                selected = choose_project_folder(str(payload.get("initial") or self.server.state.settings.root))
+                selected = choose_project_folder(
+                    str(payload.get("initial") or self.server.state.settings.root),
+                    str(payload.get("title") or "选择 BNCT Agent 工程目录"),
+                )
                 self._send_json({"path": selected or ""})
+            elif parsed.path == "/api/import-skill":
+                source = str(payload.get("source") or "").strip()
+                if not source:
+                    source = choose_project_folder(
+                        str(payload.get("initial") or self.server.state.settings.root),
+                        "选择要导入的 skill 文件夹",
+                    ) or ""
+                if not source:
+                    self._send_json({"cancelled": True})
+                else:
+                    self._send_json(self.server.state.import_skill(source))
             elif parsed.path == "/api/chat":
                 self._send_json(
                     self.server.state.chat(

@@ -12,9 +12,10 @@
 - Claude 风格本地 Web 工作台：会话列表、对话、工作区、文件预览、连接设置、审批弹窗
 - 本地会话持久化、收藏置顶、搜索、删除和项目级/私有记忆
 - Claude 风格 `SKILL.md` 能力包发现机制，支持 `skills/`、`.agent/skills/`、`.claude/skills/`
+- 右侧 Skill 面板默认装载 `code-review`、`debug`、`run`、`verify`、`dicom-tags`，并支持从本地导入新的 skill
 - 支持 OpenAI、DeepSeek、Kimi 三种供应商和各自独立的 Key、模型、Base URL
 - OpenAI Responses API 与兼容 Chat Completions 的多轮工具调用循环
-- 工程文件列举、读取、搜索和经审批的文本写入
+- 工程文件列举、读取、搜索和经审批的文本写入；绝对路径写入可在人工批准后落到工作区外
 - 经审批的单元测试执行，拒绝任意 shell 命令
 - BNCT 计划 JSON 快照的脱敏检查、字段校验与原值汇总
 - `dicom-tags` skill：对上传的 DICOM 附件做本地 tag 解析、Pixel Data 省略、直接标识符脱敏
@@ -93,6 +94,16 @@ Use this skill when the user uploads DICOM images and asks for tag metadata.
 启停方式很朴素：放入上述目录即加载；移走目录或在 frontmatter 中设置
 `enabled: false` 即卸载。新增 PPT、PDF、Excel、DICOM-RT 等垂直能力时，优先做成
 skill，而不是改核心 Agent 代码。
+
+Web 右侧 Skill 面板会显示当前已发现的 skill。点击虚线加号可以选择一个包含
+`SKILL.md` 的文件夹，导入后会复制到 `.agent/skills/<name>`，因此默认只在本机生效，
+不会自动进入 Git。项目内置的默认 skill 位于 `skills/`，包括：
+
+- `code-review`：审查代码风险、回归和缺失测试。
+- `debug`：定位失败原因并收敛到最小修复。
+- `run`：启动或执行受控流程，并报告结果。
+- `verify`：用测试、健康检查和界面检查验证改动。
+- `dicom-tags`：解析 DICOM tag，脱敏直接标识符并省略 Pixel Data。
 
 ## 快速开始
 

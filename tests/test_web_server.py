@@ -1,8 +1,10 @@
 import json
 import os
+import shutil
 import threading
 import unittest
 import base64
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -100,9 +102,13 @@ class WebServerTests(unittest.TestCase):
         self.assertIn("今天想处理什么", body)
         self.assertIn('<div class="file-preview" id="preview-content">', body)
         self.assertIn('id="browse-folder-button"', body)
+        self.assertIn('id="workspace-switch-button"', body)
+        self.assertIn('id="import-skill-button"', body)
         self.assertIn('id="session-list"', body)
         self.assertIn('id="attachment-input"', body)
         self.assertIn("CLAUDE.md", body)
+        self.assertIn("SKILLS", body)
+        self.assertNotIn("QUICK TASKS", body)
         self.assertNotIn("Safety boundary", body)
         self.assertNotIn("LIVE TRACE", body)
 
@@ -119,6 +125,8 @@ class WebServerTests(unittest.TestCase):
         self.assertIn("font-size: 15px", styles)
         self.assertIn(".session-item", styles)
         self.assertIn(".attachment-chip", styles)
+        self.assertIn("function renderSkills", script)
+        self.assertIn(".skill-import-card", styles)
 
     def test_api_requires_random_token(self):
         with self.assertRaises(HTTPError) as context:
@@ -134,7 +142,8 @@ class WebServerTests(unittest.TestCase):
         self.assertIn("memory", config)
         self.assertEqual(config["memory"]["projectFile"], "CLAUDE.md")
         self.assertIn("skills", config)
-        self.assertIn("dicom-tags", {item["name"] for item in config["skills"]})
+        skill_names = {item["name"] for item in config["skills"]}
+        self.assertTrue({"code-review", "debug", "dicom-tags", "run", "verify"}.issubset(skill_names))
         self.assertIn("README.md", files["files"])
 
     def test_session_endpoints_create_favorite_search_and_delete(self):
@@ -190,11 +199,32 @@ class WebServerTests(unittest.TestCase):
     def test_skill_registry_loads_and_reads_dicom_skill(self):
         registry = SkillRegistry(self.root)
         catalog = registry.public_catalog()
-        self.assertIn("dicom-tags", {item["name"] for item in catalog})
+        self.assertTrue({"code-review", "debug", "dicom-tags", "run", "verify"}.issubset({item["name"] for item in catalog}))
         skill = registry.read_skill("dicom-tags")
         self.assertIn("SKILL.md", skill["files"])
         self.assertIn("scripts/parse_dicom.py", skill["files"])
         self.assertIn("DICOM Tags", skill["content"])
+
+    def test_import_skill_endpoint_copies_local_skill(self):
+        skill_name = f"unit-import-{uuid.uuid4().hex[:10]}"
+        target = self.root / ".agent" / "skills" / skill_name
+        shutil.rmtree(target, ignore_errors=True)
+        source = self.root / "tests" / "runtime_output" / f"{skill_name}-source"
+        shutil.rmtree(source, ignore_errors=True)
+        source.mkdir(parents=True)
+        (source / "SKILL.md").write_text(
+            "---\n"
+            f"name: {skill_name}\n"
+            "description: Imported test skill.\n"
+            "display_name: Unit Import\n"
+            "short_description: Test import path.\n"
+            "---\n\n"
+            "# Unit Import\n",
+            encoding="utf-8",
+        )
+        result = self._post_json("/api/import-skill", {"source": str(source)})
+        self.assertEqual(result["skill"]["name"], skill_name)
+        self.assertIn(skill_name, {item["name"] for item in result["config"]["skills"]})
 
     def test_running_server_is_detected_for_single_instance_launch(self):
         self.assertTrue(existing_server_is_healthy("127.0.0.1", self.server.server_address[1]))

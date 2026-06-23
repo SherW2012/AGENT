@@ -102,7 +102,7 @@ class ToolRegistry:
             ),
             Tool(
                 "write_project_text",
-                "Create or replace a project text file. Requires explicit human approval.",
+                "Create or replace a text file. Relative paths stay inside the project root; absolute paths outside the root require the same explicit human approval.",
                 {**object_schema, "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]},
                 Risk.WRITE,
                 write_project_text,

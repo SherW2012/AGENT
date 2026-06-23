@@ -40,6 +40,19 @@ def resolve_inside(root: Path, relative_path: str) -> Path:
     return resolved
 
 
+def resolve_write_target(root: Path, path: str) -> tuple[Path, bool]:
+    candidate = Path(path).expanduser()
+    root = root.resolve()
+    if candidate.is_absolute():
+        resolved = candidate.resolve()
+        try:
+            resolved.relative_to(root)
+            return resolved, False
+        except ValueError:
+            return resolved, True
+    return resolve_inside(root, path), False
+
+
 def _is_ignored(path: Path, root: Path) -> bool:
     return bool(IGNORED_PARTS.intersection(path.relative_to(root).parts))
 
@@ -100,7 +113,7 @@ def search_project_text(root: Path, query: str, glob: str = "*") -> dict[str, An
 
 
 def write_project_text(root: Path, path: str, content: str) -> dict[str, Any]:
-    target = resolve_inside(root, path)
+    target, outside_root = resolve_write_target(root, path)
     if target.suffix.lower() not in TEXT_SUFFIXES:
         raise ValueError("MVP 仅允许写入常见文本源文件")
     encoded = content.encode("utf-8")
@@ -109,10 +122,15 @@ def write_project_text(root: Path, path: str, content: str) -> dict[str, Any]:
     target.parent.mkdir(parents=True, exist_ok=True)
     existed = target.exists()
     target.write_bytes(encoded)
+    try:
+        display_path = target.relative_to(root.resolve()).as_posix()
+    except ValueError:
+        display_path = str(target)
     return {
-        "path": target.relative_to(root).as_posix(),
+        "path": display_path,
         "bytes": len(encoded),
         "operation": "updated" if existed else "created",
+        "outsideRoot": outside_root,
     }
 
 
@@ -134,4 +152,3 @@ def run_unit_tests(root: Path) -> dict[str, Any]:
         "output": output[-20_000:],
         "truncated": len(output) > 20_000,
     }
-

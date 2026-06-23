@@ -2,6 +2,9 @@
 name: dicom-tags
 description: Parse DICOM attachments into de-identified tag metadata summaries for engineering review.
 version: 0.1.0
+display_name: "DICOM Tags"
+short_description: "解析 DICOM tag，省略 Pixel Data，并脱敏直接患者标识符。"
+default_prompt: "请使用 dicom-tags skill 解析我上传的 DICOM 附件，列出关键 tag、几何信息和脱敏后的头信息摘要。"
 trusted: true
 attachment_extensions: [".dcm", ".dicom"]
 attachment_mime_types: ["application/dicom", "application/x-dicom"]

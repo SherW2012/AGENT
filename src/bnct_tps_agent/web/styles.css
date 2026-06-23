@@ -564,7 +564,7 @@ svg {
 
 .workspace-panel {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(220px, 34vh) minmax(0, 1fr);
   gap: 12px;
   min-height: 0;
   padding: 14px 12px;
@@ -580,13 +580,31 @@ svg {
   border-radius: 15px;
   padding: 13px;
 }
-.workspace-card.compact { flex: 0 0 auto; }
+.workspace-overview { overflow: hidden; }
+.skill-card-panel { overflow: hidden; }
 .workspace-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .eyebrow { display: block; margin-bottom: 5px; color: var(--accent); font-size: 9.5px; font-weight: 750; letter-spacing: 0.16em; }
 .workspace-heading h2,
 .drawer-header h2,
 .modal-header h2 { margin: 0; font-size: 16px; font-weight: 680; letter-spacing: -0.01em; }
 .workspace-heading h2 { max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.workspace-switch-button {
+  display: grid;
+  place-items: center;
+  width: 31px;
+  height: 31px;
+  padding: 0;
+  background: #f7f4ef;
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+  color: var(--text-soft);
+  cursor: pointer;
+  transition: 130ms ease;
+}
+.workspace-switch-button:hover { background: var(--panel-3); border-color: #bdb5a9; color: var(--text); }
+.workspace-switch-button:disabled { opacity: 0.55; cursor: wait; }
+.workspace-switch-button svg { width: 17px; height: 17px; }
 .workspace-chip {
   display: flex;
   align-items: center;
@@ -605,7 +623,7 @@ svg {
 .status-dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px rgba(111, 197, 156, 0.08); }
 .file-list {
   flex: 1;
-  min-height: 120px;
+  min-height: 72px;
   overflow: auto;
   padding: 2px;
   scrollbar-width: thin;
@@ -636,30 +654,54 @@ svg {
 .file-item[data-depth="3"] { padding-left: 38px; }
 .file-item[data-depth="4"] { padding-left: 48px; }
 
-.quick-action {
+.skill-list {
+  display: grid;
+  gap: 6px;
+  min-height: 0;
+  overflow: auto;
+  padding: 1px 1px 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+.skill-action,
+.skill-import-card {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
   padding: 9px 8px;
-  margin-bottom: 4px;
   background: transparent;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 10px;
   color: var(--text-soft);
   cursor: pointer;
   text-align: left;
 }
-.quick-action:hover { background: var(--panel-3); color: var(--text); }
-.quick-action strong,
-.quick-action small { display: block; }
-.quick-action strong { font-size: 13px; font-weight: 630; }
-.quick-action small { margin-top: 3px; color: var(--muted); font-size: 11.5px; }
-.quick-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; }
-.quick-icon svg { width: 16px; height: 16px; }
-.quick-icon.violet { color: var(--violet); background: rgba(156, 143, 232, 0.11); }
-.quick-icon.amber { color: var(--amber); background: rgba(217, 170, 94, 0.1); }
-.quick-icon.green { color: var(--green); background: rgba(79, 138, 105, 0.1); }
+.skill-action:hover,
+.skill-import-card:hover { background: var(--panel-3); color: var(--text); }
+.skill-action strong,
+.skill-action small,
+.skill-import-card strong,
+.skill-import-card small { display: block; }
+.skill-action strong,
+.skill-import-card strong { font-size: 13px; font-weight: 650; }
+.skill-action small,
+.skill-import-card small { margin-top: 3px; color: var(--muted); font-size: 11.3px; line-height: 1.35; }
+.skill-icon,
+.plus-mark { display: grid; place-items: center; width: 32px; height: 32px; flex: 0 0 auto; border-radius: 9px; font-weight: 720; }
+.skill-icon svg { width: 16px; height: 16px; }
+.skill-icon.violet { color: var(--violet); background: rgba(156, 143, 232, 0.11); }
+.skill-icon.amber { color: var(--amber); background: rgba(217, 170, 94, 0.1); }
+.skill-icon.green { color: var(--green); background: rgba(79, 138, 105, 0.1); }
+.skill-icon.red { color: var(--red); background: rgba(185, 85, 85, 0.09); }
+.skill-icon.accent { color: var(--accent); background: var(--accent-soft); }
+.skill-import-card {
+  margin-top: 8px;
+  border: 1px dashed #c9c0b3;
+  background: rgba(255, 255, 255, 0.25);
+}
+.skill-import-card:disabled { opacity: 0.6; cursor: wait; }
+.plus-mark { color: var(--accent); background: rgba(201, 100, 66, 0.08); font-size: 20px; }
 
 .drawer-backdrop,
 .modal-backdrop { position: fixed; inset: 0; background: rgba(54, 47, 40, 0.28); backdrop-filter: blur(5px); z-index: 20; }

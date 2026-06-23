@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import shutil
 import sys
 import uuid
 from dataclasses import dataclass, field
@@ -12,6 +13,7 @@ from typing import Any
 SKILL_ROOTS = ("skills", ".agent/skills", ".claude/skills")
 MAX_SKILL_TEXT_CHARS = 24_000
 SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
+IMPORT_IGNORES = shutil.ignore_patterns(".git", ".venv", "__pycache__", "*.pyc", ".bnct_agent")
 
 
 @dataclass(frozen=True)
@@ -116,6 +118,9 @@ class SkillRegistry:
     def list(self) -> list[Skill]:
         return sorted(self._skills.values(), key=lambda item: item.name)
 
+    def refresh(self) -> None:
+        self._skills = self._discover()
+
     def get(self, name: str) -> Skill:
         skill = self._skills.get(name)
         if skill is None:
@@ -128,6 +133,9 @@ class SkillRegistry:
             result.append(
                 {
                     "name": skill.name,
+                    "displayName": str(skill.metadata.get("display_name") or skill.name),
+                    "shortDescription": str(skill.metadata.get("short_description") or skill.description),
+                    "defaultPrompt": str(skill.metadata.get("default_prompt") or ""),
                     "description": skill.description,
                     "path": skill.path.relative_to(self.root).as_posix(),
                     "trusted": skill.trusted,
@@ -137,6 +145,31 @@ class SkillRegistry:
                 }
             )
         return result
+
+    def import_skill(self, source: str | Path) -> dict[str, Any]:
+        source_path = Path(source).expanduser().resolve()
+        if not source_path.is_dir():
+            raise FileNotFoundError(f"Skill 文件夹不存在: {source_path}")
+        skill_md = source_path / "SKILL.md"
+        if not skill_md.is_file():
+            raise ValueError("选择的文件夹中没有 SKILL.md")
+        metadata, _body = parse_skill_markdown(skill_md.read_text(encoding="utf-8", errors="replace"))
+        name = str(metadata.get("name") or source_path.name).strip()
+        if not SKILL_NAME_RE.match(name):
+            raise ValueError("Skill name 只能使用字母、数字、下划线或短横线")
+        if name in self._skills:
+            raise ValueError(f"Skill 已存在: {name}")
+        target = (self.root / ".agent" / "skills" / name).resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            target.relative_to(source_path)
+        except ValueError:
+            pass
+        else:
+            raise ValueError("不能把 skill 导入到自身目录内")
+        shutil.copytree(source_path, target, ignore=IMPORT_IGNORES)
+        self.refresh()
+        return self.read_skill(name)
 
     def catalog_context(self) -> str:
         catalog = self.public_catalog()
