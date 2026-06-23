@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bnct-tps-agent"
+version = "0.1.0"
+description = "Safety-first engineering agent scaffold for BNCT treatment planning systems"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "openai>=1.75.0",
+]
+
+[project.scripts]
+bnct-agent = "bnct_tps_agent.cli:main"
+bnct-agent-gui = "bnct_tps_agent.gui:main"
+bnct-agent-web = "bnct_tps_agent.web_server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+bnct_tps_agent = ["web/*.html", "web/*.css", "web/*.js"]

@@ -1,0 +1,17 @@
+{
+  "deidentified": true,
+  "case_id": "SYNTHETIC-002",
+  "patient_name": "Synthetic Identifier",
+  "source": {
+    "tps_name": "test",
+    "tps_version": "1"
+  },
+  "metrics": [
+    {
+      "structure": "TARGET",
+      "name": "mean",
+      "value": 1.0,
+      "unit": "Gy-Eq"
+    }
+  ]
+}

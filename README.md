@@ -1,0 +1,182 @@
+# BNCT TPS 专属 AI Agent MVP
+
+这是一个面向 BNCT TPS 研发日常流程的安全优先 Agent 骨架，提供本地 Web 工作台和
+命令行两种入口。模型可以理解任务、选择工具、读取工程、搜索代码、执行测试，
+并对**脱敏的只读计划快照**做格式校验和指标汇总。
+
+> 当前版本是研发辅助工具，不是医疗器械，不生成处方，不批准计划，也不向 TPS、
+> DICOM 或患者数据库写回数据。所有模型输出都必须由有资质人员复核。
+
+## 已实现
+
+- Claude 风格本地 Web 工作台：工程树、对话、活动时间线、文件预览、连接设置、审批弹窗
+- 支持 OpenAI、DeepSeek、Kimi 三种供应商和各自独立的 Key、模型、Base URL
+- OpenAI Responses API 与兼容 Chat Completions 的多轮工具调用循环
+- 工程文件列举、读取、搜索和经审批的文本写入
+- 经审批的单元测试执行，拒绝任意 shell 命令
+- BNCT 计划 JSON 快照的脱敏检查、字段校验与原值汇总
+- 代码层风险分级：`read`、`write`、`execute`、`clinical`
+- `write`/`execute` 人工确认，`clinical` 无条件阻断
+- JSONL 审计日志，敏感字段脱敏，工具结果只保留摘要和哈希
+- 无 API Key 的离线演示及单元测试
+
+## 架构
+
+```text
+用户 Web / CLI
+   |
+   v
+Provider Adapter (OpenAI Responses / Compatible Chat Completions)
+   |
+   +--> Tool Registry --> Safety Policy --> Human Approval
+   |                             |
+   |                             +--> Audit JSONL
+   |
+   +--> Project Tools (read/search/write/test)
+   +--> TPS Snapshot Tools (validate/summarize, read-only)
+```
+
+模型只负责规划和解释；路径约束、审批、PHI 检查、命令白名单和临床动作阻断均由
+本地确定性代码执行。
+
+## 快速开始
+
+```powershell
+cd D:\wsr\code\project\agent
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e .
+Copy-Item .env.example .env
+```
+
+### Web 图形界面（推荐）
+
+安装完成后双击 `Start-BNCT-Agent.cmd`。它会在本机 `127.0.0.1` 启动服务并自动打开
+浏览器。也可以手动运行：
+
+```powershell
+bnct-agent-web --root D:\wsr\code\project\agent --open-browser
+```
+
+Web 工作台可以预览文件、配置本次会话的 API Key、发送任务，并在写文件或运行测试
+前通过弹窗审批。服务只监听本机地址，接口由随机会话令牌保护，API Key 不写入磁盘。
+
+旧的 Tk 桌面入口 `bnct-agent-gui` 仍保留作为离线备用入口。
+
+## 模型供应商与 API Key
+
+三家服务独立开户、独立创建 Key、独立计费。无需先拥有 OpenAI API，直接在网页设置里
+选择你能使用的供应商即可。未设置 `BNCT_AGENT_PROVIDER` 时默认选择 DeepSeek。
+
+| 供应商 | Key 环境变量 | 默认 Base URL | 默认模型 | 官方入口 |
+|---|---|---|---|---|
+| OpenAI / GPT | `OPENAI_API_KEY` | SDK 默认地址 | `gpt-5.4-mini` | [创建 Key](https://platform.openai.com/api-keys) |
+| DeepSeek | `DEEPSEEK_API_KEY` | `https://api.deepseek.com` | `deepseek-v4-pro` | [创建 Key](https://platform.deepseek.com/api_keys) |
+| Kimi / Moonshot | `MOONSHOT_API_KEY` | `https://api.moonshot.cn/v1` | `kimi-k2.6` | [用户中心](https://platform.kimi.com/console/account) |
+
+DeepSeek 和 Kimi 官方都提供 OpenAI SDK 兼容的 Chat Completions 接口，但模型 ID、
+Base URL 和 Key 不能混用。当前 DeepSeek 文档推荐 V4 模型；旧的 `deepseek-chat` 和
+`deepseek-reasoner` 已进入弃用流程。本项目因此使用 `deepseek-v4-pro` / `flash`。
+
+参考：[DeepSeek 接入文档](https://api-docs.deepseek.com/)、
+[DeepSeek Tool Calls](https://api-docs.deepseek.com/guides/tool_calls)、
+[Kimi 快速开始](https://platform.kimi.com/docs/api/quickstart)、
+[Kimi 模型列表](https://platform.kimi.com/docs/models)、
+[Kimi Tool Use](https://platform.kimi.com/docs/api/tool-use)。
+
+### OpenAI 账号说明
+
+ChatGPT Plus、Pro 或 Team 订阅不会自动生成一个可读取的 API Key，ChatGPT 与 API
+平台也分别计费。操作步骤：
+
+1. 登录 [OpenAI Platform API Keys](https://platform.openai.com/api-keys)。
+2. 点击创建新的 Secret Key，并在创建时立即保存；之后通常只能看到掩码，无法再次
+   查看完整密钥，遗失时应创建新 Key 并撤销旧 Key。
+3. 在 [API Billing](https://platform.openai.com/settings/organization/billing/overview)
+   配置 API 计费或余额。
+4. 打开本项目右上角“设置”，把 Key 填入 API Key 输入框。不要把 Key 发到聊天消息、
+   工单或代码仓库中。
+
+本地工作台只把 Key 保存在当前服务进程内存中；关闭服务后需要重新输入。
+
+### 命令行（保留）
+
+PowerShell 不会自动读取 `.env`，运行前设置环境变量：
+
+```powershell
+$env:DEEPSEEK_API_KEY = "你的 DeepSeek 密钥"
+bnct-agent chat --provider deepseek --root .
+
+$env:MOONSHOT_API_KEY = "你的 Kimi 密钥"
+bnct-agent chat --provider kimi --model kimi-k2.6 --root .
+
+$env:OPENAI_API_KEY = "你的 OpenAI 密钥"
+bnct-agent chat --provider openai --root .
+```
+
+不连接模型即可验证安全工具链：
+
+```powershell
+bnct-agent demo --root .
+python -m unittest discover -s tests -v
+```
+
+也可执行一次性任务：
+
+```powershell
+bnct-agent ask --root D:\path\to\tps-repo "定位剂量计算模块并总结测试覆盖"
+```
+
+## 计划快照接口
+
+MVP 不直接连接临床 TPS。TPS 先导出只读、脱敏 JSON，例如
+`sample_data/deidentified_case.json`。Agent 只确认结构、数值类型和单位是否存在，
+不会判断计划是否临床可接受，也不会重算剂量。
+
+接入真实 TPS 时建议增加一个独立的 `tps-adapter` 服务：
+
+1. 只读 API 首先上线，只暴露脱敏病例元数据、结构列表、DVH/剂量指标和计算日志。
+2. API 使用短期身份凭证、最小权限、病例级访问控制和完整审计。
+3. Agent 工具使用 JSON Schema，并给每个返回值附带来源、软件版本、算法版本和单位。
+4. 所有写操作进入“变更草稿 -> 人工评审 -> TPS 原生验证 -> 双人确认”流程。
+5. 计划批准、处方修改、照射参数下发和患者数据写回始终留在 TPS 的受控界面。
+
+## 推荐开发路线
+
+### Phase 1：研发助手（当前骨架）
+
+- 代码问答、日志分析、测试执行、需求追踪、测试用例草拟
+- 脱敏计划快照读取和数据完整性检查
+- 建立 20-50 个真实日常任务的回归评测集
+
+### Phase 2：TPS 只读 Copilot
+
+- 对接内部只读 REST/gRPC/MCP Adapter
+- 增加 DICOM-RT/私有格式解析器，但只输出脱敏摘要
+- 绑定算法版本、数据库版本、材料和截面数据版本
+- 用金标准病例验证引用准确性、单位一致性和拒答行为
+
+### Phase 3：受控工作流自动化
+
+- 允许创建工单、测试报告、变更草稿和 QA 清单
+- 引入角色权限、电子签名、双人审批与不可篡改审计
+- 按医疗软件质量体系做风险管理、验证确认和变更控制
+
+### Phase 4：临床决策支持（独立项目）
+
+这一阶段不应由通用 Agent 直接演进而来。需要单独的医疗器械合规、临床验证、
+网络安全、可用性工程和上市后监测方案，并明确人机职责。
+
+## 数据与部署建议
+
+- 不要把 PHI、原始 DICOM 或可回溯患者身份的数据发送到未经批准的云端。
+- 生产环境优先使用组织批准的企业端点，确认数据保留、训练使用和地域策略。
+- API Key 放入密钥管理系统，不放入 `.env`、日志、提示词或代码仓库。
+- 审计日志位于 `<root>/.bnct_agent/audit/`；正式环境应转存到受控审计系统。
+- 为每个工具设置超时、输出上限、速率限制和授权范围。
+
+## 下一步要补的业务信息
+
+要把它变成真正贴合你日常工作的 Agent，需要把每天的任务拆成一张清单：输入、
+输出、当前软件、是否含 PHI、允许自动化程度、审批人、失败回退方式。优先选择
+高频、低风险、结果易验证的任务，不要从自动优化或自动批准计划开始。

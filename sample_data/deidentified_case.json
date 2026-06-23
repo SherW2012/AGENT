@@ -1,0 +1,28 @@
+{
+  "schema_version": "0.1",
+  "deidentified": true,
+  "case_id": "SYNTHETIC-BNCT-001",
+  "source": {
+    "tps_name": "Example BNCT TPS",
+    "tps_version": "0.0-synthetic",
+    "algorithm": "Synthetic fixture - no dose calculation",
+    "algorithm_version": "none",
+    "exported_at": "2026-06-22T00:00:00Z"
+  },
+  "metrics": [
+    {
+      "structure": "SYNTHETIC_TARGET",
+      "name": "reported_mean_dose",
+      "value": 10.0,
+      "unit": "Gy-Eq"
+    },
+    {
+      "structure": "SYNTHETIC_OAR",
+      "name": "reported_max_dose",
+      "value": 2.5,
+      "unit": "Gy-Eq"
+    }
+  ],
+  "notes": "Synthetic values for software testing only. Not clinically meaningful."
+}
+

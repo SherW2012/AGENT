@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>BNCT TPS Agent</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 2.7 20.2 7.4v9.2L12 21.3l-8.2-4.7V7.4L12 2.7Z"/><path d="m8.4 9 3.6-2 3.6 2v4L12 15l-3.6-2V9Z"/></svg>
+          </div>
+          <div>
+            <div class="brand-title">BNCT TPS Agent</div>
+            <div class="brand-subtitle">Engineering workspace</div>
+          </div>
+        </div>
+
+        <div class="workspace-chip" id="workspace-chip" title="当前工程">
+          <span class="status-dot"></span>
+          <span id="workspace-name">Loading workspace</span>
+        </div>
+
+        <div class="top-actions">
+          <div class="connection-state offline" id="connection-state">
+            <span class="state-dot"></span>
+            <span id="connection-label">离线模式</span>
+          </div>
+          <button class="icon-button" id="new-session-button" type="button" title="新会话" aria-label="新会话">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <button class="icon-button" id="settings-button" type="button" title="设置" aria-label="设置">
+            <svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-1.42 1.42-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.55V20h-2v-.09a1.7 1.7 0 0 0-1.1-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06-1.42-1.42.06-.06A1.7 1.7 0 0 0 9.35 15a1.7 1.7 0 0 0-1.55-1.03H7.7v-2h.09a1.7 1.7 0 0 0 1.56-1.1A1.7 1.7 0 0 0 9 9l-.06-.06 1.42-1.42.06.06a1.7 1.7 0 0 0 1.88.34 1.7 1.7 0 0 0 1.03-1.55V6.3h2v.09a1.7 1.7 0 0 0 1.1 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 1.42 1.42-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.55 1.03h.09v2h-.09A1.7 1.7 0 0 0 19.4 15Z"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="workspace-layout">
+        <aside class="sidebar">
+          <section class="sidebar-section">
+            <div class="section-heading">
+              <span>工作区</span>
+              <span class="count-badge" id="file-count">0</span>
+            </div>
+            <div class="file-search-wrap">
+              <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
+              <input id="file-search" type="search" placeholder="搜索文件" autocomplete="off" />
+            </div>
+            <div class="file-list" id="file-list" aria-label="工程文件"></div>
+          </section>
+
+          <section class="quick-section">
+            <div class="section-heading"><span>快捷任务</span></div>
+            <button class="quick-action" type="button" data-task="分析当前工程结构，指出主要模块、入口和测试覆盖。">
+              <span class="quick-icon violet"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4z"/><path d="m8 10 2 2-2 2M12 14h4"/></svg></span>
+              <span><strong>分析工程</strong><small>模块与测试入口</small></span>
+            </button>
+            <button class="quick-action" id="snapshot-demo-button" type="button">
+              <span class="quick-icon amber"><svg viewBox="0 0 24 24"><path d="M5 3h14v18H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></span>
+              <span><strong>校验快照</strong><small>离线安全演示</small></span>
+            </button>
+          </section>
+
+          <div class="safety-card">
+            <div class="safety-title"><span class="shield">✓</span> Safety boundary</div>
+            <p>临床批准、处方修改与患者数据写回由本地策略硬性阻断。</p>
+          </div>
+        </aside>
+
+        <main class="conversation-panel">
+          <div class="conversation-scroll" id="conversation-scroll">
+            <div class="empty-state" id="empty-state">
+              <div class="hero-mark" aria-hidden="true">
+                <svg viewBox="0 0 48 48"><path d="M24 4 41 14v20L24 44 7 34V14L24 4Z"/><path d="m16.5 18.5 7.5-4.2 7.5 4.2v9L24 31.7l-7.5-4.2v-9Z"/></svg>
+              </div>
+              <h1>今天想处理什么？</h1>
+              <p>阅读代码、分析日志、运行测试，或检查脱敏的 BNCT 计划快照。</p>
+              <div class="suggestion-grid">
+                <button type="button" data-task="浏览工程并总结剂量计算模块的调用链。">
+                  <span>理解代码</span>
+                  <small>总结剂量计算调用链</small>
+                </button>
+                <button type="button" data-task="检查当前工程的测试结构，找出明显缺失的边界测试。">
+                  <span>检查测试</span>
+                  <small>寻找边界覆盖缺口</small>
+                </button>
+                <button type="button" data-task="搜索 TODO 和 FIXME，并按风险给出处理顺序。">
+                  <span>整理任务</span>
+                  <small>归纳 TODO 与 FIXME</small>
+                </button>
+              </div>
+            </div>
+            <div class="message-list" id="message-list" aria-live="polite"></div>
+          </div>
+
+          <div class="composer-zone">
+            <div class="composer" id="composer">
+              <textarea id="prompt-input" rows="1" placeholder="给 BNCT Agent 一个任务..." aria-label="任务输入"></textarea>
+              <div class="composer-footer">
+                <div class="composer-meta">
+                  <span class="model-pill" id="model-pill">未连接模型</span>
+                  <span>Shift + Enter 换行</span>
+                </div>
+                <button class="send-button" id="send-button" type="button" aria-label="发送任务">
+                  <svg viewBox="0 0 24 24"><path d="m5 12 7-7 7 7M12 5v14"/></svg>
+                </button>
+              </div>
+            </div>
+            <div class="medical-note">研发辅助工具，不构成医疗建议；所有输出必须由有资质人员复核。</div>
+          </div>
+        </main>
+
+        <aside class="activity-panel">
+          <div class="activity-header">
+            <div>
+              <span class="eyebrow">LIVE TRACE</span>
+              <h2>Agent 活动</h2>
+            </div>
+            <button class="tiny-button" id="clear-activity-button" type="button">清空</button>
+          </div>
+          <div class="activity-list" id="activity-list">
+            <div class="activity-empty">
+              <div class="pulse-ring"></div>
+              <strong>等待任务</strong>
+              <span>工具调用与审批会显示在这里</span>
+            </div>
+          </div>
+          <div class="trace-footer">
+            <span><i class="legend read"></i>只读自动允许</span>
+            <span><i class="legend approval"></i>写入需审批</span>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <div class="drawer-backdrop hidden" id="preview-backdrop"></div>
+    <aside class="preview-drawer hidden" id="preview-drawer" aria-label="文件预览">
+      <div class="drawer-header">
+        <div>
+          <span class="eyebrow">FILE PREVIEW</span>
+          <h2 id="preview-title">文件预览</h2>
+        </div>
+        <button class="icon-button" id="close-preview-button" type="button" aria-label="关闭预览">
+          <svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <div class="file-preview" id="preview-content"></div>
+    </aside>
+
+    <div class="modal-backdrop hidden" id="settings-modal">
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div class="modal-header">
+          <div>
+            <span class="eyebrow">LOCAL CONNECTION</span>
+            <h2 id="settings-title">连接设置</h2>
+          </div>
+          <button class="icon-button close-modal" type="button" aria-label="关闭">
+            <svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
+          </button>
+        </div>
+
+        <fieldset class="provider-picker">
+          <legend>模型供应商</legend>
+          <label class="provider-option">
+            <input type="radio" name="provider" value="openai" />
+            <span><strong>OpenAI</strong><small>GPT</small></span>
+          </label>
+          <label class="provider-option">
+            <input type="radio" name="provider" value="deepseek" />
+            <span><strong>DeepSeek</strong><small>V4</small></span>
+          </label>
+          <label class="provider-option">
+            <input type="radio" name="provider" value="kimi" />
+            <span><strong>Kimi</strong><small>Moonshot</small></span>
+          </label>
+        </fieldset>
+
+        <div class="key-explainer">
+          <div class="info-icon">i</div>
+          <div>
+            <strong id="provider-help-title">每家模型服务使用独立的 API Key</strong>
+            <p id="provider-help-text">选择你已有账户的供应商。API Key 与网页会员不是同一项服务，费用由对应平台独立结算。</p>
+            <div class="official-links">
+              <a id="provider-key-link" href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer">创建 API Key ↗</a>
+              <a id="provider-docs-link" href="https://developers.openai.com/api/docs/quickstart" target="_blank" rel="noreferrer">官方接入文档 ↗</a>
+            </div>
+          </div>
+        </div>
+
+        <form id="settings-form">
+          <label>
+            <span>API Key</span>
+            <input id="api-key-input" type="password" placeholder="sk-...（仅保存在本次本机进程内）" autocomplete="off" />
+          </label>
+          <div class="form-grid">
+            <label>
+              <span>模型</span>
+              <input id="model-input" type="text" list="provider-models" />
+              <datalist id="provider-models"></datalist>
+            </label>
+            <label>
+              <span>Base URL <em>可选</em></span>
+              <input id="base-url-input" type="url" placeholder="企业网关地址" />
+            </label>
+          </div>
+          <label class="directory-field">
+            <span>工程目录</span>
+            <div class="input-action-row">
+              <input id="root-input" type="text" />
+              <button class="folder-button" id="browse-folder-button" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10h-17z"/><path d="M3.5 9h17"/></svg>
+                <span id="browse-folder-label">打开文件夹</span>
+              </button>
+            </div>
+          </label>
+          <div class="privacy-row">
+            <span class="lock-icon">⌁</span>
+            Key 通过随机令牌保护的本机接口传入，不写入磁盘或审计日志。
+          </div>
+          <div class="modal-actions">
+            <button class="secondary-button close-modal" type="button">取消</button>
+            <button class="primary-button" type="submit">保存并连接</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal-backdrop hidden" id="approval-modal">
+      <div class="modal-card approval-card" role="dialog" aria-modal="true" aria-labelledby="approval-title">
+        <div class="approval-symbol">!</div>
+        <span class="eyebrow">HUMAN APPROVAL REQUIRED</span>
+        <h2 id="approval-title">Agent 请求执行受控操作</h2>
+        <div class="approval-summary">
+          <div><span>工具</span><strong id="approval-tool"></strong></div>
+          <div><span>风险</span><strong id="approval-risk"></strong></div>
+        </div>
+        <pre id="approval-arguments"></pre>
+        <p>请检查参数。批准仅对这一次调用有效。</p>
+        <div class="modal-actions">
+          <button class="secondary-button" id="deny-approval-button" type="button">拒绝</button>
+          <button class="danger-button" id="allow-approval-button" type="button">允许本次执行</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
