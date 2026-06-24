@@ -7,6 +7,10 @@ from pathlib import Path
 from .providers import get_provider
 
 
+WEB_SEARCH_MODES = {"auto", "ask", "off"}
+WEB_SEARCH_NETWORKS = {"auto", "direct", "system"}
+
+
 @dataclass(frozen=True)
 class Settings:
     root: Path
@@ -17,6 +21,8 @@ class Settings:
     audit_dir: Path
     max_steps: int = 12
     interactive: bool = True
+    web_search_mode: str = "auto"
+    web_search_network: str = "auto"
 
     @classmethod
     def load(
@@ -28,6 +34,8 @@ class Settings:
         base_url: str | None = None,
         api_key: str | None = None,
         interactive: bool = True,
+        web_search_mode: str | None = None,
+        web_search_network: str | None = None,
     ) -> "Settings":
         resolved_root = Path(root).expanduser().resolve()
         if not resolved_root.is_dir():
@@ -42,6 +50,12 @@ class Settings:
         configured_base_url = base_url
         if configured_base_url is None:
             configured_base_url = os.getenv(f"{profile.id.upper()}_BASE_URL") or profile.base_url
+        configured_web_search_mode = (web_search_mode or os.getenv("BNCT_AGENT_WEB_SEARCH_MODE", "auto")).lower()
+        if configured_web_search_mode not in WEB_SEARCH_MODES:
+            raise ValueError("BNCT_AGENT_WEB_SEARCH_MODE must be one of: auto, ask, off")
+        configured_web_search_network = (web_search_network or os.getenv("BNCT_AGENT_WEB_SEARCH_NETWORK", "auto")).lower()
+        if configured_web_search_network not in WEB_SEARCH_NETWORKS:
+            raise ValueError("BNCT_AGENT_WEB_SEARCH_NETWORK must be one of: auto, direct, system")
 
         return cls(
             root=resolved_root,
@@ -57,4 +71,6 @@ class Settings:
             audit_dir=resolved_root / ".bnct_agent" / "audit",
             max_steps=max_steps,
             interactive=interactive,
+            web_search_mode=configured_web_search_mode,
+            web_search_network=configured_web_search_network,
         )

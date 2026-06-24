@@ -17,9 +17,11 @@ from .project_tools import (
 from .safety import PolicyDenied, Risk, SafetyPolicy
 from .skills import SkillRegistry
 from .tps_tools import summarize_plan_snapshot, validate_plan_snapshot
+from .web_search import fetch_url, looks_sensitive_url, looks_sensitive_web_query, web_search
 
 
 ToolHandler = Callable[..., dict[str, Any]]
+RiskResolver = Callable[[dict[str, Any]], Risk]
 EventCallback = Callable[[dict[str, Any]], None]
 
 
@@ -30,6 +32,12 @@ class Tool:
     parameters: dict[str, Any]
     risk: Risk
     handler: ToolHandler
+    risk_resolver: RiskResolver | None = None
+
+    def risk_for(self, arguments: dict[str, Any]) -> Risk:
+        if self.risk_resolver is None:
+            return self.risk
+        return self.risk_resolver(arguments)
 
     def schema(self) -> dict[str, Any]:
         return {
@@ -59,12 +67,16 @@ class ToolRegistry:
         audit: AuditLogger,
         event_callback: EventCallback | None = None,
         skill_registry: SkillRegistry | None = None,
+        web_search_mode: str = "auto",
+        web_search_network: str = "auto",
     ):
         self.root = root
         self.policy = policy
         self.audit = audit
         self.event_callback = event_callback
         self.skill_registry = skill_registry or SkillRegistry(root)
+        self.web_search_mode = web_search_mode
+        self.web_search_network = web_search_network
         self._tools = {tool.name: tool for tool in self._build_tools()}
 
     def _emit(self, event: dict[str, Any]) -> None:
@@ -78,7 +90,7 @@ class ToolRegistry:
 
     def _build_tools(self) -> list[Tool]:
         object_schema = {"type": "object", "additionalProperties": False}
-        return [
+        tools = [
             Tool(
                 "list_project_files",
                 "List files below the project root. Generated and dependency directories are excluded.",
@@ -140,7 +152,7 @@ class ToolRegistry:
                 "List local skills discovered from skills/, .agent/skills/, and .claude/skills/.",
                 {**object_schema, "properties": {}, "required": []},
                 Risk.READ,
-                lambda _root: {"skills": self.skill_registry.public_catalog()},
+                lambda _root: {"skills": self.skill_registry.public_catalog(include_background=True)},
             ),
             Tool(
                 "read_agent_skill",
@@ -148,6 +160,20 @@ class ToolRegistry:
                 {**object_schema, "properties": {"name": {"type": "string"}}, "required": ["name"]},
                 Risk.READ,
                 lambda _root, name: self.skill_registry.read_skill(name),
+            ),
+            Tool(
+                "install_agent_skill",
+                "Install a Claude-style skill from an explicit public GitHub URL into .agent/skills. Use this when the user asks to install/import a skill from a GitHub URL; do not web-search the URL first. Pass ref as an empty string to use the repository default branch.",
+                {
+                    **object_schema,
+                    "properties": {
+                        "url": {"type": "string"},
+                        "ref": {"type": "string"},
+                    },
+                    "required": ["url", "ref"],
+                },
+                Risk.EXTERNAL,
+                self._install_agent_skill,
             ),
             Tool(
                 "validate_plan_snapshot",
@@ -164,6 +190,77 @@ class ToolRegistry:
                 summarize_plan_snapshot,
             ),
         ]
+        if self.web_search_mode != "off":
+            tools.append(
+                Tool(
+                    "fetch_url",
+                    "Fetch and extract readable text from one explicit public http(s) URL. Use this instead of web_search when the user gives a specific URL to open, read, inspect, or analyze. Local/private hosts and credential-bearing URLs are blocked.",
+                    {
+                        **object_schema,
+                        "properties": {
+                            "url": {"type": "string"},
+                            "max_chars": {"type": "integer"},
+                        },
+                        "required": ["url", "max_chars"],
+                    },
+                    Risk.READ,
+                    lambda root, url, max_chars: fetch_url(
+                        root,
+                        url,
+                        max_chars=max_chars,
+                        network=self.web_search_network,
+                    ),
+                    risk_resolver=self._fetch_url_risk,
+                )
+            )
+            tools.append(
+                Tool(
+                    "web_search",
+                    "Search the public web for current external information. Do not include patient identifiers, secrets, internal paths, or private code in the query.",
+                    {
+                        **object_schema,
+                        "properties": {
+                            "query": {"type": "string"},
+                            "max_results": {"type": "integer"},
+                        },
+                        "required": ["query", "max_results"],
+                    },
+                    Risk.READ,
+                    lambda root, query, max_results: web_search(
+                        root,
+                        query,
+                        max_results=max_results,
+                        network=self.web_search_network,
+                    ),
+                    risk_resolver=self._web_search_risk,
+                )
+            )
+        return tools
+
+    def _install_agent_skill(self, _root: Path, url: str, ref: str) -> dict[str, Any]:
+        installed = self.skill_registry.install_github_skill(url, ref=ref)
+        self._emit({"type": "skill_imported", "skill": installed["name"]})
+        return {
+            "name": installed["name"],
+            "description": installed["description"],
+            "path": installed["path"],
+            "trusted": installed["trusted"],
+            "metadata": installed["metadata"],
+            "files": installed["files"],
+            "message": f"Skill {installed['name']} installed. Use read_agent_skill before relying on it.",
+        }
+
+    def _web_search_risk(self, arguments: dict[str, Any]) -> Risk:
+        query = str(arguments.get("query") or "")
+        if self.web_search_mode == "ask" or looks_sensitive_web_query(query):
+            return Risk.EXTERNAL
+        return Risk.READ
+
+    def _fetch_url_risk(self, arguments: dict[str, Any]) -> Risk:
+        url = str(arguments.get("url") or "")
+        if self.web_search_mode == "ask" or looks_sensitive_url(url):
+            return Risk.EXTERNAL
+        return Risk.READ
 
     @property
     def schemas(self) -> list[dict[str, Any]]:
@@ -187,18 +284,19 @@ class ToolRegistry:
             self.audit.tool_result(name, result)
             return result
 
+        risk = tool.risk_for(arguments)
         serialized_arguments = json.dumps(arguments, ensure_ascii=False, sort_keys=True)
         self.audit.record(
             "tool_requested",
             tool=name,
-            risk=tool.risk.value,
+            risk=risk.value,
             argument_keys=sorted(arguments.keys()),
             arguments_sha256=sha256_text(serialized_arguments),
             arguments_chars=len(serialized_arguments),
         )
-        self._emit({"type": "tool_started", "tool": name, "risk": tool.risk.value})
+        self._emit({"type": "tool_started", "tool": name, "risk": risk.value})
         try:
-            self.policy.require(name, tool.risk, arguments)
+            self.policy.require(name, risk, arguments)
             result = tool.handler(self.root, **arguments)
             wrapped = {"ok": True, "result": result}
         except (PolicyDenied, ValueError, FileNotFoundError, TimeoutError, json.JSONDecodeError) as exc:
@@ -210,7 +308,7 @@ class ToolRegistry:
             {
                 "type": "tool_finished",
                 "tool": name,
-                "risk": tool.risk.value,
+                "risk": risk.value,
                 "ok": bool(wrapped.get("ok")),
                 "error_type": wrapped.get("error_type"),
             }

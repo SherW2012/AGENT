@@ -4,6 +4,8 @@ const token = new URLSearchParams(window.location.hash.slice(1)).get("token") ||
 const MAX_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_BYTES = 750_000;
 const MAX_DICOM_HEADER_BYTES = 1_500_000;
+const LONG_PASTE_CHAR_THRESHOLD = 4_000;
+const MAX_PASTED_TEXT_CHARS = 180_000;
 const TEXT_ATTACHMENT_PATTERN = /\.(txt|md|json|csv|log|py|js|ts|tsx|html|css|xml|yaml|yml|toml|ini|cfg)$/i;
 const DICOM_ATTACHMENT_PATTERN = /\.(dcm|dicom)$/i;
 
@@ -15,8 +17,10 @@ const state = {
   currentSessionId: null,
   currentApproval: null,
   pendingAttachments: [],
+  activeDraft: null,
   busy: false,
   eventTimer: null,
+  lastEventId: 0,
 };
 
 const elements = {
@@ -43,7 +47,6 @@ const elements = {
   fileList: document.querySelector("#file-list"),
   fileSearch: document.querySelector("#file-search"),
   importSkill: document.querySelector("#import-skill-button"),
-  memoryPill: document.querySelector("#memory-pill"),
   messageList: document.querySelector("#message-list"),
   model: document.querySelector("#model-input"),
   modelOptions: document.querySelector("#provider-models"),
@@ -67,11 +70,15 @@ const elements = {
   settingsButton: document.querySelector("#settings-button"),
   settingsForm: document.querySelector("#settings-form"),
   settingsModal: document.querySelector("#settings-modal"),
+  settingsSections: document.querySelectorAll("[data-settings-section-panel]"),
+  settingsTabs: document.querySelectorAll("[data-settings-section]"),
   sidebarExpand: document.querySelector("#sidebar-expand-button"),
   sidebarToggle: document.querySelector("#sidebar-toggle"),
   skillCount: document.querySelector("#skill-count"),
   skillList: document.querySelector("#skill-list"),
   toastStack: document.querySelector("#toast-stack"),
+  webSearchInputs: document.querySelectorAll('input[name="web-search-mode"]'),
+  webSearchNetworkInputs: document.querySelectorAll('input[name="web-search-network"]'),
   workspaceChip: document.querySelector("#workspace-chip"),
   workspaceName: document.querySelector("#workspace-name"),
   workspacePath: document.querySelector("#workspace-path"),
@@ -108,6 +115,66 @@ async function api(path, options = {}) {
   return payload;
 }
 
+async function streamApi(path, payload, onEvent) {
+  let response;
+  try {
+    response = await fetch(path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-BNCT-Token": token,
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    throw new Error(`无法连接本地服务：${error.message}`);
+  }
+  if (!response.ok) {
+    let errorPayload = {};
+    try {
+      errorPayload = await response.json();
+    } catch (_error) {
+      errorPayload = { error: `本地服务返回了非 JSON 响应 (${response.status})` };
+    }
+    if (response.status === 401) {
+      setConnection("offline", "会话已过期");
+      throw new Error("本地会话已过期。请关闭此页面，并重新双击 Start-BNCT-Agent.cmd 打开工作台。");
+    }
+    throw new Error(errorPayload.error || `请求失败 (${response.status})`);
+  }
+  if (!response.body) {
+    throw new Error("当前浏览器不支持流式响应读取");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const event = JSON.parse(trimmed);
+      if (event.type === "error") {
+        throw new Error(event.error || "任务失败");
+      }
+      onEvent(event);
+    }
+  }
+  buffer += decoder.decode();
+  const trailing = buffer.trim();
+  if (trailing) {
+    const event = JSON.parse(trailing);
+    if (event.type === "error") {
+      throw new Error(event.error || "任务失败");
+    }
+    onEvent(event);
+  }
+}
+
 function showToast(message, kind = "info") {
   const toast = document.createElement("div");
   toast.className = `toast ${kind}`;
@@ -136,7 +203,11 @@ function setBusy(busy) {
 }
 
 function updateConfig(config) {
+  const eventScopeChanged = !state.config
+    || state.config.root !== config.root
+    || state.config.currentSessionId !== config.currentSessionId;
   state.config = config;
+  if (eventScopeChanged) state.lastEventId = 0;
   state.skills = config.skills || [];
   state.currentSessionId = config.currentSessionId || state.currentSessionId;
   const parts = config.root.replaceAll("\\", "/").split("/").filter(Boolean);
@@ -144,10 +215,9 @@ function updateConfig(config) {
   elements.workspacePath.textContent = config.root;
   elements.workspaceChip.title = config.root;
   elements.modelPill.textContent = config.apiKeyConfigured ? `${config.providerLabel} · ${config.model}` : "未连接模型";
-  if (config.memory) {
-    elements.memoryPill.title = `项目记忆：${config.memory.projectFile}\n本地记忆：${config.memory.localFile}`;
-  }
   elements.providerInputs.forEach((input) => { input.checked = input.value === config.provider; });
+  elements.webSearchInputs.forEach((input) => { input.checked = input.value === (config.webSearchMode || "auto"); });
+  elements.webSearchNetworkInputs.forEach((input) => { input.checked = input.value === (config.webSearchNetwork || "auto"); });
   syncProviderFields(config.provider, false);
   elements.model.value = config.model;
   elements.baseUrl.value = config.baseUrl || "";
@@ -162,6 +232,14 @@ function providerConfig(providerId) {
 
 function selectedProvider() {
   return Array.from(elements.providerInputs).find((input) => input.checked)?.value || "openai";
+}
+
+function selectedWebSearchMode() {
+  return Array.from(elements.webSearchInputs).find((input) => input.checked)?.value || "auto";
+}
+
+function selectedWebSearchNetwork() {
+  return Array.from(elements.webSearchNetworkInputs).find((input) => input.checked)?.value || "auto";
 }
 
 function syncProviderFields(providerId, resetValues) {
@@ -372,7 +450,7 @@ function renderMarkdown(container, text) {
 
 function attachmentLabel(item) {
   const size = Number(item.size || 0);
-  const kind = item.kind === "dicom" ? "DICOM" : item.kind === "binary" ? "Binary" : "Text";
+  const kind = item.kind === "dicom" ? "DICOM" : item.kind === "binary" ? "Binary" : item.kind === "pasted" ? "Pasted" : "Text";
   const sizeText = size > 1024 ? `${Math.round(size / 1024)} KB` : `${size} B`;
   return `${item.name || "附件"} · ${kind} · ${sizeText}`;
 }
@@ -442,6 +520,112 @@ function appendTyping() {
 
 function removeTyping() {
   document.querySelector("#typing-message")?.remove();
+}
+
+function toolDisplayName(name) {
+  const labels = {
+    fetch_url: "读取网页",
+    web_search: "联网搜索",
+    install_agent_skill: "安装 Skill",
+    list_agent_skills: "读取 Skill 列表",
+    read_agent_skill: "读取 Skill",
+    list_project_files: "浏览工作区",
+    read_project_text: "读取文件",
+    search_project_text: "搜索文件",
+    write_project_text: "写入文件",
+    run_unit_tests: "运行测试",
+    validate_plan_snapshot: "校验计划快照",
+    summarize_plan_snapshot: "摘要计划快照",
+    read_agent_memory: "读取记忆",
+    append_agent_memory: "写入记忆",
+  };
+  return labels[name] || name || "工具调用";
+}
+
+function appendAssistantDraft() {
+  const article = appendMessage("assistant", "", { id: "streaming-message" });
+  const meta = article.querySelector(".message-meta");
+  const content = article.querySelector(".message-content");
+  meta.textContent = "BNCT Agent 正在处理";
+
+  const activity = document.createElement("div");
+  activity.className = "activity-panel";
+  const title = document.createElement("div");
+  title.className = "activity-title";
+  const titleDot = document.createElement("span");
+  const titleText = document.createElement("strong");
+  titleText.textContent = "正在理解任务";
+  title.append(titleDot, titleText);
+  const list = document.createElement("div");
+  list.className = "activity-list";
+  activity.append(title, list);
+  article.querySelector(".message-body").append(activity);
+
+  state.activeDraft = {
+    article,
+    meta,
+    content,
+    activity,
+    activityTitle: titleText,
+    activityList: list,
+    activities: [],
+  };
+  setActivity("agent", "正在理解任务", "active");
+  return article;
+}
+
+function setDraftText(text) {
+  if (!state.activeDraft) return;
+  renderMarkdown(state.activeDraft.content, text);
+  elements.conversation.scrollTo({ top: elements.conversation.scrollHeight, behavior: "smooth" });
+}
+
+function setActivity(key, label, status = "active", detail = "") {
+  if (!state.activeDraft) return;
+  const existing = state.activeDraft.activities.find((item) => item.key === key);
+  const item = existing || { key, label, status, detail };
+  item.label = label;
+  item.status = status;
+  item.detail = detail;
+  if (!existing) state.activeDraft.activities.push(item);
+  renderActivity();
+}
+
+function renderActivity() {
+  if (!state.activeDraft) return;
+  const active = state.activeDraft.activities.find((item) => item.status === "active");
+  const waiting = state.activeDraft.activities.find((item) => item.status === "waiting");
+  const current = waiting || active || state.activeDraft.activities.at(-1);
+  state.activeDraft.activityTitle.textContent = current?.label || "正在处理";
+  state.activeDraft.activityList.replaceChildren();
+  state.activeDraft.activities.slice(-6).forEach((item) => {
+    const row = document.createElement("div");
+    row.className = `activity-item ${item.status}`;
+    const dot = document.createElement("span");
+    dot.className = "activity-dot";
+    const text = document.createElement("span");
+    text.textContent = item.detail ? `${item.label}：${item.detail}` : item.label;
+    row.append(dot, text);
+    state.activeDraft.activityList.append(row);
+  });
+}
+
+function finalizeAssistantDraft() {
+  if (!state.activeDraft) return;
+  state.activeDraft.meta.textContent = "BNCT Agent";
+  setActivity("agent", "已完成", "done");
+  state.activeDraft.activity.classList.add("done");
+  state.activeDraft.article.removeAttribute("id");
+  state.activeDraft = null;
+}
+
+function failAssistantDraft(message) {
+  if (!state.activeDraft) return;
+  state.activeDraft.meta.textContent = "BNCT Agent 已中断";
+  setActivity("agent", "任务失败", "failed", message);
+  state.activeDraft.activity.classList.add("failed");
+  state.activeDraft.article.removeAttribute("id");
+  state.activeDraft = null;
 }
 
 function resizePrompt() {
@@ -714,6 +898,51 @@ function closePreview() {
   elements.previewDrawer.classList.add("hidden");
 }
 
+function estimateTextBytes(text) {
+  return new TextEncoder().encode(text).length;
+}
+
+function pastedAttachmentName() {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `pasted-${stamp}.txt`;
+}
+
+function addPastedTextAttachment(text) {
+  if (state.pendingAttachments.length >= MAX_ATTACHMENTS) {
+    showToast(`一次最多上传 ${MAX_ATTACHMENTS} 个附件`, "error");
+    return false;
+  }
+  const normalized = String(text).replace(/\r\n?/g, "\n");
+  const truncated = normalized.length > MAX_PASTED_TEXT_CHARS;
+  const content = truncated ? normalized.slice(0, MAX_PASTED_TEXT_CHARS) : normalized;
+  const size = estimateTextBytes(content);
+  state.pendingAttachments.push({
+    name: pastedAttachmentName(),
+    type: "text/plain",
+    size,
+    originalSize: estimateTextBytes(normalized),
+    encoding: "text",
+    kind: "pasted",
+    content,
+  });
+  renderPendingAttachments();
+  if (truncated) {
+    showToast("粘贴内容过长，已作为 txt 附件加入并按上限截断。", "error");
+  } else {
+    showToast("长文本已作为临时 txt 附件加入。");
+  }
+  return true;
+}
+
+function handlePromptPaste(event) {
+  const clipboard = event.clipboardData;
+  if (!clipboard || clipboard.files?.length) return;
+  const text = clipboard.getData("text/plain");
+  if (!text || text.length < LONG_PASTE_CHAR_THRESHOLD) return;
+  event.preventDefault();
+  addPastedTextAttachment(text);
+}
+
 function renderPendingAttachments() {
   elements.attachmentList.replaceChildren();
   elements.attachmentList.classList.toggle("hidden", state.pendingAttachments.length === 0);
@@ -824,47 +1053,102 @@ function storedAttachmentMetadata(items) {
 }
 
 async function sendTask(prefilled = null) {
-  const task = String(prefilled ?? elements.prompt.value).trim();
+  const attachments = [...state.pendingAttachments];
+  const typedTask = String(prefilled ?? elements.prompt.value).trim();
+  const task = typedTask || (attachments.length ? "请阅读附件内容。" : "");
   if (!task || state.busy) return;
   if (!state.config?.apiKeyConfigured) {
-    appendMessage("system", `需要先配置 ${state.config?.providerLabel || "模型供应商"} 的 API Key。请打开左侧连接设置，也可以切换到其他供应商。`);
+    appendMessage("system", `需要先配置 ${state.config?.providerLabel || "模型供应商"} 的 API Key。请打开左下角设置，也可以切换到其他供应商。`);
     openSettings();
     return;
   }
-  const attachments = [...state.pendingAttachments];
   const attachmentMetadata = storedAttachmentMetadata(attachments);
   state.pendingAttachments = [];
   renderPendingAttachments();
   elements.prompt.value = "";
   resizePrompt();
   appendMessage("user", task, { attachments: attachmentMetadata });
-  appendTyping();
+  appendAssistantDraft();
   setBusy(true);
+  let answerText = "";
+  let completed = false;
   try {
-    const result = await api("/api/chat", {
-      method: "POST",
-      body: JSON.stringify({
+    await streamApi(
+      "/api/chat-stream",
+      {
         sessionId: state.currentSessionId,
         task,
         attachments,
-      }),
-    });
-    removeTyping();
-    appendMessage("assistant", result.answer);
-    if (result.session) {
-      state.currentSessionId = result.session.id;
+      },
+      (event) => {
+        if (event.type === "delta") {
+          answerText += event.text || "";
+          setDraftText(answerText);
+        } else if (event.type === "done") {
+          completed = true;
+          answerText = event.answer || answerText || "模型未返回文本结果。";
+          setDraftText(answerText);
+          if (event.session) {
+            state.currentSessionId = event.session.id;
+          }
+          finalizeAssistantDraft();
+        }
+      },
+    );
+    if (!completed) {
+      setDraftText(answerText || "模型未返回文本结果。");
+      finalizeAssistantDraft();
     }
     await loadSessions();
   } catch (error) {
-    removeTyping();
+    failAssistantDraft(error.message);
     appendMessage("system", `任务失败：${error.message}`);
   } finally {
     setBusy(false);
   }
 }
 
+function handleServerEvent(event) {
+  state.lastEventId = Math.max(state.lastEventId, Number(event.id || 0));
+  if (event.type === "agent_started") {
+    setActivity("agent", "正在理解任务", "active");
+  }
+  if (event.type === "approval_required") {
+    setActivity(`approval:${event.tool}`, "等待人工批准", "waiting", toolDisplayName(event.tool));
+  }
+  if (event.type === "approval_resolved") {
+    setActivity(`approval:${event.tool}`, event.approved ? "审批已通过" : "审批已拒绝", event.approved ? "done" : "failed", toolDisplayName(event.tool));
+  }
+  if (event.type === "tool_started") {
+    setActivity(`tool:${event.tool}`, toolDisplayName(event.tool), "active");
+  }
+  if (event.type === "tool_finished") {
+    setActivity(`tool:${event.tool}`, toolDisplayName(event.tool), event.ok ? "done" : "failed", event.ok ? "完成" : (event.error_type || "失败"));
+  }
+  if (event.type === "agent_finished") {
+    setActivity("agent", "正在整理答案", "done");
+  }
+  if (event.type === "agent_failed") {
+    setActivity("agent", "任务失败", "failed");
+  }
+  if (event.type === "tool_started" && event.tool === "web_search") {
+    showToast("正在联网搜索公开资料...");
+  }
+  if (event.type === "tool_finished" && event.tool === "web_search") {
+    showToast(event.ok ? "联网搜索完成" : "联网搜索失败", event.ok ? "info" : "error");
+  }
+  if (event.type === "tool_started" && event.tool === "fetch_url") {
+    showToast("正在读取网页...");
+  }
+  if (event.type === "tool_finished" && event.tool === "fetch_url") {
+    showToast(event.ok ? "网页读取完成" : "网页读取失败", event.ok ? "info" : "error");
+  }
+}
+
 async function pollEvents() {
   try {
+    const payload = await api(`/api/events?since=${state.lastEventId}`);
+    (payload.events || []).forEach(handleServerEvent);
     await pollApprovals();
   } catch (_error) {
     // The server can be briefly unavailable while restarting. The next poll retries.
@@ -898,17 +1182,32 @@ async function resolveApproval(approved) {
   }
 }
 
-function openSettings() {
+function switchSettingsSection(section) {
+  const target = section || "connection";
+  elements.settingsTabs.forEach((tab) => {
+    tab.classList.toggle("is-active", tab.dataset.settingsSection === target);
+  });
+  elements.settingsSections.forEach((panel) => {
+    panel.classList.toggle("is-active", panel.dataset.settingsSectionPanel === target);
+  });
+}
+
+function openSettings(section = "connection") {
   if (state.config) {
     elements.providerInputs.forEach((input) => { input.checked = input.value === state.config.provider; });
     syncProviderFields(state.config.provider, false);
     elements.model.value = state.config.model;
     elements.baseUrl.value = state.config.baseUrl || "";
     elements.root.value = state.config.root;
+    elements.webSearchInputs.forEach((input) => { input.checked = input.value === (state.config.webSearchMode || "auto"); });
+    elements.webSearchNetworkInputs.forEach((input) => { input.checked = input.value === (state.config.webSearchNetwork || "auto"); });
   }
+  switchSettingsSection(section);
   elements.apiKey.value = "";
   elements.settingsModal.classList.remove("hidden");
-  window.setTimeout(() => elements.apiKey.focus(), 50);
+  window.setTimeout(() => {
+    if (section === "connection") elements.apiKey.focus();
+  }, 50);
 }
 
 function closeSettings() {
@@ -923,6 +1222,8 @@ async function saveSettings(event) {
     model: elements.model.value.trim(),
     baseUrl: elements.baseUrl.value.trim(),
     root: elements.root.value.trim(),
+    webSearchMode: selectedWebSearchMode(),
+    webSearchNetwork: selectedWebSearchNetwork(),
   };
   try {
     const config = await api("/api/config", { method: "POST", body: JSON.stringify(payload) });
@@ -931,8 +1232,8 @@ async function saveSettings(event) {
     await loadFiles();
     await loadSessions();
     await loadCurrentSession(config.currentSessionId);
-    appendMessage("system", "连接设置已更新。API Key 仅保存在当前本机进程内。关闭服务后需要重新输入。 ");
-    showToast("连接设置已保存");
+    appendMessage("system", "设置已更新。API Key 仅保存在当前本机进程内。关闭服务后需要重新输入。");
+    showToast("设置已保存");
   } catch (error) {
     showToast(error.message, "error");
   }
@@ -983,6 +1284,8 @@ async function switchWorkspaceFolder() {
         baseUrl: state.config.baseUrl || "",
         apiKey: "",
         root: picked.path,
+        webSearchMode: state.config.webSearchMode || "auto",
+        webSearchNetwork: state.config.webSearchNetwork || "auto",
       }),
     });
     updateConfig(config);
@@ -1046,6 +1349,7 @@ function toggleSidebar(collapsed) {
 function bindEvents() {
   elements.send.addEventListener("click", () => sendTask());
   elements.prompt.addEventListener("input", resizePrompt);
+  elements.prompt.addEventListener("paste", handlePromptPaste);
   elements.prompt.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -1056,7 +1360,10 @@ function bindEvents() {
   elements.attachmentInput.addEventListener("change", () => addAttachments(elements.attachmentInput.files));
   elements.fileSearch.addEventListener("input", () => renderFiles(elements.fileSearch.value));
   elements.sessionSearch.addEventListener("input", () => loadSessions(elements.sessionSearch.value));
-  elements.settingsButton.addEventListener("click", openSettings);
+  elements.settingsButton.addEventListener("click", () => openSettings());
+  elements.settingsTabs.forEach((tab) => {
+    tab.addEventListener("click", () => switchSettingsSection(tab.dataset.settingsSection));
+  });
   elements.browseFolder.addEventListener("click", pickProjectFolder);
   elements.providerInputs.forEach((input) => input.addEventListener("change", () => {
     if (input.checked) syncProviderFields(input.value, true);

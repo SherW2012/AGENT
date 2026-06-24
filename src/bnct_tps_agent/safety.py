@@ -7,6 +7,7 @@ from typing import Callable
 
 class Risk(StrEnum):
     READ = "read"
+    EXTERNAL = "external"
     WRITE = "write"
     EXECUTE = "execute"
     CLINICAL = "clinical"
@@ -46,4 +47,3 @@ class SafetyPolicy:
         decision = self.decide(tool_name, risk, arguments)
         if not decision.allowed:
             raise PolicyDenied(decision.reason)
-

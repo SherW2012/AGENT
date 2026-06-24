@@ -44,6 +44,11 @@ class Skill:
     def attachment_mime_types(self) -> list[str]:
         return [str(item).lower() for item in self.metadata.get("attachment_mime_types", [])]
 
+    @property
+    def visibility(self) -> str:
+        value = str(self.metadata.get("visibility") or "panel").strip().lower()
+        return value if value in {"panel", "background"} else "panel"
+
 
 def _parse_scalar(value: str) -> Any:
     value = value.strip()
@@ -127,9 +132,11 @@ class SkillRegistry:
             raise FileNotFoundError(f"Skill 不存在: {name}")
         return skill
 
-    def public_catalog(self) -> list[dict[str, Any]]:
+    def public_catalog(self, *, include_background: bool = False) -> list[dict[str, Any]]:
         result = []
         for skill in self.list():
+            if skill.visibility == "background" and not include_background:
+                continue
             result.append(
                 {
                     "name": skill.name,
@@ -139,6 +146,7 @@ class SkillRegistry:
                     "description": skill.description,
                     "path": skill.path.relative_to(self.root).as_posix(),
                     "trusted": skill.trusted,
+                    "visibility": skill.visibility,
                     "hasProcessor": bool(skill.processor),
                     "attachmentExtensions": skill.attachment_extensions,
                     "attachmentMimeTypes": skill.attachment_mime_types,
@@ -171,8 +179,14 @@ class SkillRegistry:
         self.refresh()
         return self.read_skill(name)
 
+    def install_github_skill(self, url: str, *, ref: str = "") -> dict[str, Any]:
+        from .skill_installer import stage_github_skill
+
+        with stage_github_skill(url, ref=ref, temp_parent=self.root / ".bnct_agent" / "tmp") as source:
+            return self.import_skill(source)
+
     def catalog_context(self) -> str:
-        catalog = self.public_catalog()
+        catalog = self.public_catalog(include_background=True)
         if not catalog:
             return ""
         lines = [
@@ -180,6 +194,8 @@ class SkillRegistry:
         ]
         for item in catalog:
             details = []
+            if item["visibility"] == "background":
+                details.append("background")
             if item["hasProcessor"]:
                 details.append("processor")
             if item["attachmentExtensions"]:

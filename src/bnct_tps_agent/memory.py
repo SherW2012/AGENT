@@ -38,10 +38,9 @@ This file is private to this machine and is ignored by Git through `.bnct_agent/
 Use it for stable preferences, workflow notes, and project habits that should be
 available in future sessions.
 
-## Preferences
+## Notes
 
-- The user prefers a light, Claude-like graphical interface with command-line
-  control still available.
+- No local notes yet.
 """
 
 

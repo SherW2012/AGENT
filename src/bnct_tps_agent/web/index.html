@@ -30,10 +30,6 @@
             <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
             <span>新建会话</span>
           </button>
-          <button class="nav-button" id="settings-button" type="button">
-            <svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-1.42 1.42-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.55V20h-2v-.09a1.7 1.7 0 0 0-1.1-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06-1.42-1.42.06-.06A1.7 1.7 0 0 0 9.35 15a1.7 1.7 0 0 0-1.55-1.03H7.7v-2h.09a1.7 1.7 0 0 0 1.56-1.1A1.7 1.7 0 0 0 9 9l-.06-.06 1.42-1.42.06.06a1.7 1.7 0 0 0 1.88.34 1.7 1.7 0 0 0 1.03-1.55V6.3h2v.09a1.7 1.7 0 0 0 1.1 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 1.42 1.42-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.55 1.03h.09v2h-.09A1.7 1.7 0 0 0 19.4 15Z"/></svg>
-            <span>连接设置</span>
-          </button>
         </div>
 
         <div class="session-search-wrap">
@@ -52,10 +48,10 @@
             <span class="state-dot"></span>
             <span id="connection-label">离线模式</span>
           </div>
-          <div class="memory-pill" id="memory-pill" title="项目记忆">
-            <span>记忆</span>
-            <strong>CLAUDE.md</strong>
-          </div>
+          <button class="sidebar-settings-button" id="settings-button" type="button">
+            <svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-1.42 1.42-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.55V20h-2v-.09a1.7 1.7 0 0 0-1.1-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06-1.42-1.42.06-.06A1.7 1.7 0 0 0 9.35 15a1.7 1.7 0 0 0-1.55-1.03H7.7v-2h.09a1.7 1.7 0 0 0 1.56-1.1A1.7 1.7 0 0 0 9 9l-.06-.06 1.42-1.42.06.06a1.7 1.7 0 0 0 1.88.34 1.7 1.7 0 0 0 1.03-1.55V6.3h2v.09a1.7 1.7 0 0 0 1.1 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 1.42 1.42-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.55 1.03h.09v2h-.09A1.7 1.7 0 0 0 19.4 15Z"/></svg>
+            <span>设置</span>
+          </button>
         </div>
       </aside>
 
@@ -82,9 +78,9 @@
                 <span>检查测试</span>
                 <small>寻找边界覆盖缺口</small>
               </button>
-              <button type="button" data-task="记住：我希望界面优先保持亮色、清爽、接近 Claude 的网页布局。">
-                <span>记住偏好</span>
-                <small>写入私有记忆需审批</small>
+              <button type="button" data-task="阅读项目记忆和安全边界，说明你能做和不能做的事情。">
+                <span>了解边界</span>
+                <small>查看项目记忆与审批规则</small>
               </button>
             </div>
           </div>
@@ -170,80 +166,134 @@
     </aside>
 
     <div class="modal-backdrop hidden" id="settings-modal">
-      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="modal-card settings-card" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <div class="modal-header">
           <div>
-            <span class="eyebrow">LOCAL CONNECTION</span>
-            <h2 id="settings-title">连接设置</h2>
+            <span class="eyebrow">SETTINGS</span>
+            <h2 id="settings-title">设置</h2>
           </div>
           <button class="icon-button close-modal" type="button" aria-label="关闭">
             <svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
           </button>
         </div>
 
-        <fieldset class="provider-picker">
-          <legend>模型供应商</legend>
-          <label class="provider-option">
-            <input type="radio" name="provider" value="openai" />
-            <span><strong>OpenAI</strong><small>GPT</small></span>
-          </label>
-          <label class="provider-option">
-            <input type="radio" name="provider" value="deepseek" />
-            <span><strong>DeepSeek</strong><small>V4</small></span>
-          </label>
-          <label class="provider-option">
-            <input type="radio" name="provider" value="kimi" />
-            <span><strong>Kimi</strong><small>Moonshot</small></span>
-          </label>
-        </fieldset>
+        <div class="settings-layout">
+          <nav class="settings-nav" aria-label="设置分类">
+            <button class="settings-tab is-active" type="button" data-settings-section="connection">
+              <span>连接设置</span>
+              <small>模型、密钥与工程目录</small>
+            </button>
+            <button class="settings-tab" type="button" data-settings-section="web-search">
+              <span>联网搜索</span>
+              <small>自动搜索与审批策略</small>
+            </button>
+          </nav>
 
-        <div class="key-explainer">
-          <div class="info-icon">i</div>
-          <div>
-            <strong id="provider-help-title">每家模型服务使用独立的 API Key</strong>
-            <p id="provider-help-text">选择你已有账户的供应商。API Key 与网页会员不是同一项服务，费用由对应平台独立结算。</p>
-            <div class="official-links">
-              <a id="provider-key-link" href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer">创建 API Key ↗</a>
-              <a id="provider-docs-link" href="https://developers.openai.com/api/docs/quickstart" target="_blank" rel="noreferrer">官方接入文档 ↗</a>
+          <form id="settings-form" class="settings-content">
+            <section class="settings-section is-active" data-settings-section-panel="connection">
+              <fieldset class="provider-picker">
+                <legend>模型供应商</legend>
+                <label class="provider-option">
+                  <input type="radio" name="provider" value="openai" />
+                  <span><strong>OpenAI</strong><small>GPT</small></span>
+                </label>
+                <label class="provider-option">
+                  <input type="radio" name="provider" value="deepseek" />
+                  <span><strong>DeepSeek</strong><small>V4</small></span>
+                </label>
+                <label class="provider-option">
+                  <input type="radio" name="provider" value="kimi" />
+                  <span><strong>Kimi</strong><small>Moonshot</small></span>
+                </label>
+              </fieldset>
+
+              <div class="key-explainer">
+                <div class="info-icon">i</div>
+                <div>
+                  <strong id="provider-help-title">每家模型服务使用独立的 API Key</strong>
+                  <p id="provider-help-text">选择你已有账户的供应商。API Key 与网页会员不是同一项服务，费用由对应平台独立结算。</p>
+                  <div class="official-links">
+                    <a id="provider-key-link" href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer">创建 API Key ↗</a>
+                    <a id="provider-docs-link" href="https://developers.openai.com/api/docs/quickstart" target="_blank" rel="noreferrer">官方接入文档 ↗</a>
+                  </div>
+                </div>
+              </div>
+
+              <label>
+                <span>API Key</span>
+                <input id="api-key-input" type="password" placeholder="sk-...（仅保存在本次本机进程内）" autocomplete="off" />
+              </label>
+              <div class="form-grid">
+                <label>
+                  <span>模型</span>
+                  <input id="model-input" type="text" list="provider-models" />
+                  <datalist id="provider-models"></datalist>
+                </label>
+                <label>
+                  <span>Base URL <em>可选</em></span>
+                  <input id="base-url-input" type="url" placeholder="企业网关地址" />
+                </label>
+              </div>
+              <label class="directory-field">
+                <span>工程目录</span>
+                <div class="input-action-row">
+                  <input id="root-input" type="text" />
+                  <button class="folder-button" id="browse-folder-button" type="button">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10h-17z"/><path d="M3.5 9h17"/></svg>
+                    <span id="browse-folder-label">打开文件夹</span>
+                  </button>
+                </div>
+              </label>
+              <div class="privacy-row">
+                <span class="lock-icon">⌁</span>
+                Key 通过随机令牌保护的本机接口传入，不写入磁盘或审计日志。
+              </div>
+            </section>
+
+            <section class="settings-section" data-settings-section-panel="web-search">
+              <div class="settings-section-heading">
+                <h3>联网搜索策略</h3>
+                <p>搜索是 Agent 能力的一部分，不和模型连接密钥混在一起；后续也可以继续扩展成更多能力开关。</p>
+              </div>
+              <fieldset class="web-search-picker">
+                <legend>搜索模式</legend>
+                <label class="web-search-option">
+                  <input type="radio" name="web-search-mode" value="auto" />
+                  <span><strong>Auto</strong><small>需要最新公开知识时自动搜索</small></span>
+                </label>
+                <label class="web-search-option">
+                  <input type="radio" name="web-search-mode" value="ask" />
+                  <span><strong>Ask</strong><small>每次搜索前请求人工批准</small></span>
+                </label>
+                <label class="web-search-option">
+                  <input type="radio" name="web-search-mode" value="off" />
+                  <span><strong>Off</strong><small>禁用公共联网搜索工具</small></span>
+                </label>
+              </fieldset>
+              <fieldset class="web-search-picker">
+                <legend>网络通道</legend>
+                <label class="web-search-option">
+                  <input type="radio" name="web-search-network" value="auto" />
+                  <span><strong>Auto</strong><small>先用系统代理，失败后尝试直连</small></span>
+                </label>
+                <label class="web-search-option">
+                  <input type="radio" name="web-search-network" value="direct" />
+                  <span><strong>Direct</strong><small>绕过本机代理，适合代理返回 410 时</small></span>
+                </label>
+                <label class="web-search-option">
+                  <input type="radio" name="web-search-network" value="system" />
+                  <span><strong>System</strong><small>只使用系统/环境变量代理</small></span>
+                </label>
+              </fieldset>
+              <p class="settings-help">默认建议使用 Auto：只有问题明显依赖近期公开信息时才会触发搜索；如果用户明确要求不联网，应遵循用户指令。</p>
+            </section>
+
+            <div class="modal-actions">
+              <button class="secondary-button close-modal" type="button">取消</button>
+              <button class="primary-button" type="submit">保存设置</button>
             </div>
-          </div>
+          </form>
         </div>
-
-        <form id="settings-form">
-          <label>
-            <span>API Key</span>
-            <input id="api-key-input" type="password" placeholder="sk-...（仅保存在本次本机进程内）" autocomplete="off" />
-          </label>
-          <div class="form-grid">
-            <label>
-              <span>模型</span>
-              <input id="model-input" type="text" list="provider-models" />
-              <datalist id="provider-models"></datalist>
-            </label>
-            <label>
-              <span>Base URL <em>可选</em></span>
-              <input id="base-url-input" type="url" placeholder="企业网关地址" />
-            </label>
-          </div>
-          <label class="directory-field">
-            <span>工程目录</span>
-            <div class="input-action-row">
-              <input id="root-input" type="text" />
-              <button class="folder-button" id="browse-folder-button" type="button">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10h-17z"/><path d="M3.5 9h17"/></svg>
-                <span id="browse-folder-label">打开文件夹</span>
-              </button>
-            </div>
-          </label>
-          <div class="privacy-row">
-            <span class="lock-icon">⌁</span>
-            Key 通过随机令牌保护的本机接口传入，不写入磁盘或审计日志。
-          </div>
-          <div class="modal-actions">
-            <button class="secondary-button close-modal" type="button">取消</button>
-            <button class="primary-button" type="submit">保存并连接</button>
-          </div>
-        </form>
       </div>
     </div>
 

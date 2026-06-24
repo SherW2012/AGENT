@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Iterator
 from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import urlopen
 
@@ -295,6 +295,8 @@ class ApplicationState:
                 self.audit,
                 event_callback=self.add_event,
                 skill_registry=self.skill_registry,
+                web_search_mode=self.settings.web_search_mode,
+                web_search_network=self.settings.web_search_network,
             )
             self.runtime = None
             if self.settings.api_key:
@@ -333,6 +335,8 @@ class ApplicationState:
             "model": self.settings.model,
             "baseUrl": self.settings.base_url or "",
             "apiKeyConfigured": bool(self.settings.api_key),
+            "webSearchMode": self.settings.web_search_mode,
+            "webSearchNetwork": self.settings.web_search_network,
             "busy": self._chat_lock.locked(),
             "currentSessionId": self.current_session_id,
             "memory": memory_summary(self.settings.root),
@@ -371,6 +375,8 @@ class ApplicationState:
             base_url=base_url,
             api_key=submitted_key or existing_key,
             interactive=True,
+            web_search_mode=str(payload.get("webSearchMode") or self.settings.web_search_mode),
+            web_search_network=str(payload.get("webSearchNetwork") or self.settings.web_search_network),
         )
         if loaded.api_key:
             self._credentials[provider] = loaded.api_key
@@ -442,6 +448,53 @@ class ApplicationState:
             self.sessions.add_message(self.current_session_id, "assistant", answer)
             self.add_event({"type": "agent_finished"})
             return {"answer": answer, "session": self.sessions.get(self.current_session_id)}
+        finally:
+            self._chat_lock.release()
+
+    def chat_stream(
+        self,
+        task: str,
+        attachments: list[dict[str, Any]] | None = None,
+        session_id: str | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        if not task.strip():
+            raise ValueError("任务不能为空")
+        if self.runtime is None:
+            raise RuntimeError("尚未配置 API Key，请先打开设置")
+        if not self._chat_lock.acquire(blocking=False):
+            raise RuntimeError("已有任务正在执行")
+        try:
+            if session_id and session_id != self.current_session_id:
+                session = self.sessions.set_current(session_id)
+                self.current_session_id = str(session["id"])
+                self._rebuild_runtime(clear_events=True)
+            prompt_attachments, stored_attachments = normalize_attachments(attachments, self.skill_registry)
+            history = self.sessions.recent_context(self.current_session_id)
+            effective_task = build_task_prompt(task, history, prompt_attachments)
+            self.sessions.add_message(self.current_session_id, "user", task, stored_attachments)
+            self.add_event({"type": "agent_started"})
+            answer = ""
+            emitted_done = False
+            for event in self.runtime.run_events(effective_task):
+                event_type = str(event.get("type") or "")
+                if event_type == "delta":
+                    answer += str(event.get("text") or "")
+                    yield event
+                elif event_type == "done":
+                    emitted_done = True
+                    answer = str(event.get("answer") or answer)
+                    self.sessions.add_message(self.current_session_id, "assistant", answer)
+                    self.add_event({"type": "agent_finished"})
+                    yield {**event, "answer": answer, "session": self.sessions.get(self.current_session_id)}
+                else:
+                    yield event
+            if not emitted_done:
+                self.sessions.add_message(self.current_session_id, "assistant", answer)
+                self.add_event({"type": "agent_finished"})
+                yield {"type": "done", "answer": answer, "session": self.sessions.get(self.current_session_id)}
+        except Exception:
+            self.add_event({"type": "agent_failed"})
+            raise
         finally:
             self._chat_lock.release()
 
@@ -534,6 +587,18 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
         self.wfile.write(encoded)
+
+    def _send_stream_headers(self) -> None:
+        self.send_response(HTTPStatus.OK)
+        self._security_headers()
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+    def _write_stream_event(self, payload: dict[str, Any]) -> None:
+        self.wfile.write(json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n")
+        self.wfile.flush()
 
     def _send_error_json(self, exc: Exception, status: HTTPStatus = HTTPStatus.BAD_REQUEST) -> None:
         self._send_json({"error": str(exc), "errorType": type(exc).__name__}, status)
@@ -656,6 +721,17 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
                         session_id=str(payload.get("sessionId") or "") or None,
                     )
                 )
+            elif parsed.path == "/api/chat-stream":
+                self._send_stream_headers()
+                try:
+                    for event in self.server.state.chat_stream(
+                        str(payload.get("task") or ""),
+                        attachments=payload.get("attachments") or [],
+                        session_id=str(payload.get("sessionId") or "") or None,
+                    ):
+                        self._write_stream_event(event)
+                except Exception as exc:
+                    self._write_stream_event({"type": "error", "error": str(exc), "errorType": type(exc).__name__})
             elif parsed.path == "/api/new-session":
                 self._send_json(self.server.state.new_session())
             elif parsed.path == "/api/sessions":

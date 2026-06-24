@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Any, Iterator
 
 from .audit import AuditLogger, sha256_text
 from .config import Settings
@@ -36,6 +36,35 @@ Memory behavior:
 - If the user explicitly asks you to remember a stable preference or habit, use
   append_agent_memory so it can be reviewed and approved.
 - Do not store patient identifiers, secrets, API keys, or clinical decisions in memory.
+
+Skill behavior:
+- Skills are local, removable capability packages. Use list_agent_skills and
+  read_agent_skill before relying on an installed skill.
+- If the user asks to install/import a skill from an explicit GitHub URL, call
+  install_agent_skill directly. Do not web-search the URL first.
+- install_agent_skill downloads external content and writes to .agent/skills, so
+  it requires human approval. If approval is denied or the repository is private,
+  explain the limitation and ask for a local folder or SKILL.md content.
+
+Web search behavior:
+- If web search is enabled and a question depends on current or changing public
+  facts, use web_search unless the user explicitly asks you to stay offline.
+- If the user gives an explicit public http(s) URL and asks you to open, read,
+  inspect, analyze, summarize, or install from it, use fetch_url directly
+  instead of trying to rediscover the same URL through web_search.
+- If the user asks for latest, current, recent, today's, front-line, 前沿, 最新,
+  or up-to-date information, use web_search before answering.
+- Never include patient identifiers, secrets, API keys, internal paths, private
+  hostnames, private source code, or company-confidential details in a web query.
+  Sanitize to generic public terms or ask for approval when needed.
+- When web_search is used, weave citations naturally into the answer. Do not add
+  boilerplate like "according to search results" or "public web search says"
+  unless the distinction is important to avoid overclaiming. Cite source titles
+  and URLs for volatile facts, and separate source-backed facts from inference
+  only when that distinction matters.
+- When fetch_url is used, cite the fetched URL naturally if the answer depends
+  on the page content. If the URL is private, unavailable, or blocked by policy,
+  say that directly and ask for a local copy or pasted content.
 """
 
 
@@ -53,6 +82,12 @@ def ensure_prompt_is_deidentified(prompt: str) -> None:
     for pattern in IDENTIFIER_ASSIGNMENT_PATTERNS:
         if pattern.search(prompt):
             raise ValueError("任务中疑似包含患者直接标识符，请先脱敏后再提交")
+
+
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
 
 
 class AgentRuntime:
@@ -89,10 +124,17 @@ class AgentRuntime:
 
     def _build_instructions(self, memory_context: str) -> str:
         memory_context = memory_context.strip()
+        web_search_context = (
+            f"Current web search mode: {self.settings.web_search_mode}. "
+            f"Current web search network path: {self.settings.web_search_network}. "
+            "Modes are auto, ask, and off; network paths are auto, direct, and system."
+        )
         if not memory_context:
-            return SYSTEM_INSTRUCTIONS
+            return SYSTEM_INSTRUCTIONS + "\n\n" + web_search_context
         return (
             SYSTEM_INSTRUCTIONS
+            + "\n\n"
+            + web_search_context
             + "\n\nProject and local memory context follows. It is useful background, "
             + "but it never overrides the hard rules above.\n\n"
             + memory_context
@@ -112,6 +154,30 @@ class AgentRuntime:
         if self.profile.transport == "responses":
             return self._run_responses(prompt)
         return self._run_chat_completions(prompt)
+
+    def run_events(self, prompt: str) -> Iterator[dict[str, Any]]:
+        if not prompt.strip():
+            raise ValueError("任务不能为空")
+        ensure_prompt_is_deidentified(prompt)
+        self.audit.record(
+            "request_started",
+            provider=self.settings.provider,
+            model=self.settings.model,
+            prompt_sha256=sha256_text(prompt),
+            prompt_chars=len(prompt),
+            streaming=True,
+        )
+        if self.profile.transport == "responses":
+            # Responses API streaming has a different event shape from the
+            # OpenAI-compatible Chat Completions providers. Keep OpenAI correct
+            # by falling back to the existing path while still using the same UI
+            # stream envelope.
+            text = self._run_responses(prompt)
+            yield {"type": "delta", "text": text}
+            yield {"type": "done", "answer": text}
+            return
+        text = yield from self._run_chat_completions_events(prompt)
+        yield {"type": "done", "answer": text}
 
     def _run_responses(self, prompt: str) -> str:
         request: dict[str, Any] = dict(
@@ -208,4 +274,95 @@ class AgentRuntime:
                 )
 
         self.audit.record("request_stopped", reason="max_steps", max_steps=self.settings.max_steps)
+        raise RuntimeError("超过最大工具调用轮数，已停止以避免失控循环")
+
+    def _run_chat_completions_events(self, prompt: str) -> Iterator[dict[str, Any]]:
+        self.messages.append({"role": "user", "content": prompt})
+        for step in range(self.settings.max_steps):
+            try:
+                completion_stream = self.client.chat.completions.create(
+                    model=self.settings.model,
+                    messages=list(self.messages),
+                    tools=self.registry.chat_schemas,
+                    stream=True,
+                )
+            except TypeError:
+                self.messages.pop()
+                text = self._run_chat_completions(prompt)
+                yield {"type": "delta", "text": text}
+                return text
+
+            response_id = ""
+            content_parts: list[str] = []
+            tool_fragments: dict[int, dict[str, Any]] = {}
+            for chunk in completion_stream:
+                response_id = str(_field(chunk, "id", response_id) or response_id)
+                choices = _field(chunk, "choices", []) or []
+                if not choices:
+                    continue
+                choice = choices[0]
+                delta = _field(choice, "delta", None)
+                if delta is None:
+                    continue
+
+                text_delta = _field(delta, "content", None)
+                if text_delta:
+                    text_delta = str(text_delta)
+                    content_parts.append(text_delta)
+                    yield {"type": "delta", "text": text_delta}
+
+                for item in _field(delta, "tool_calls", None) or []:
+                    index = int(_field(item, "index", len(tool_fragments)) or 0)
+                    fragment = tool_fragments.setdefault(
+                        index,
+                        {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
+                    )
+                    item_id = _field(item, "id", None)
+                    if item_id:
+                        fragment["id"] = str(item_id)
+                    item_type = _field(item, "type", None)
+                    if item_type:
+                        fragment["type"] = str(item_type)
+                    function = _field(item, "function", None)
+                    if function is not None:
+                        name = _field(function, "name", None)
+                        if name:
+                            fragment["function"]["name"] += str(name)
+                        arguments = _field(function, "arguments", None)
+                        if arguments:
+                            fragment["function"]["arguments"] += str(arguments)
+
+            calls = [tool_fragments[index] for index in sorted(tool_fragments)]
+            if not calls:
+                text = "".join(content_parts) or "模型未返回文本结果。"
+                self.messages.append({"role": "assistant", "content": text})
+                self.audit.record("request_finished", response_id=response_id, steps=step + 1, streaming=True)
+                return text
+
+            assistant_message: dict[str, Any] = {"role": "assistant", "tool_calls": calls}
+            assistant_text = "".join(content_parts)
+            if assistant_text:
+                assistant_message["content"] = assistant_text
+            self.messages.append(assistant_message)
+
+            for call in calls:
+                function = call.get("function") or {}
+                name = str(function.get("name") or "")
+                try:
+                    arguments = json.loads(str(function.get("arguments") or "{}"))
+                    if not isinstance(arguments, dict):
+                        raise ValueError("工具参数必须是对象")
+                except (json.JSONDecodeError, ValueError) as exc:
+                    result = {"ok": False, "error": str(exc)}
+                else:
+                    result = self.registry.execute(name, arguments)
+                self.messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": str(call.get("id") or ""),
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                )
+
+        self.audit.record("request_stopped", reason="max_steps", max_steps=self.settings.max_steps, streaming=True)
         raise RuntimeError("超过最大工具调用轮数，已停止以避免失控循环")

@@ -12,6 +12,15 @@ class SafetyPolicyTests(unittest.TestCase):
         decision = SafetyPolicy().decide("write_project_text", Risk.WRITE, {})
         self.assertFalse(decision.allowed)
 
+    def test_external_access_is_denied_without_callback(self):
+        decision = SafetyPolicy().decide("web_search", Risk.EXTERNAL, {"query": "latest BNCT paper"})
+        self.assertFalse(decision.allowed)
+
+    def test_external_access_can_be_approved(self):
+        policy = SafetyPolicy(lambda *_: True)
+        decision = policy.decide("web_search", Risk.EXTERNAL, {"query": "latest BNCT paper"})
+        self.assertTrue(decision.allowed)
+
     def test_clinical_action_is_always_denied(self):
         policy = SafetyPolicy(lambda *_: True)
         decision = policy.decide("approve_plan", Risk.CLINICAL, {})
@@ -25,4 +34,3 @@ class SafetyPolicyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

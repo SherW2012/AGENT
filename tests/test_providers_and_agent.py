@@ -43,6 +43,16 @@ class FakeCompletions:
         return SimpleNamespace(id="fake-response", choices=[SimpleNamespace(message=self.messages.pop(0))])
 
 
+class FakeStreamingCompletions:
+    def __init__(self, chunks):
+        self.chunks = list(chunks)
+        self.requests = []
+
+    def create(self, **request):
+        self.requests.append(request)
+        return iter(self.chunks.pop(0))
+
+
 class FakeRegistry:
     chat_schemas = [{"type": "function", "function": {"name": "list_project_files"}}]
 
@@ -98,6 +108,30 @@ class ProviderAndAgentTests(unittest.TestCase):
         self.assertEqual(result, "检查完成")
         self.assertEqual(registry.calls[0][0], "list_project_files")
         self.assertEqual(completions.requests[1]["messages"][-1]["role"], "tool")
+
+    def test_chat_provider_streams_text_events(self):
+        chunks = [
+            SimpleNamespace(
+                id="stream-response",
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="流"), finish_reason=None)],
+            ),
+            SimpleNamespace(
+                id="stream-response",
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="式"), finish_reason="stop")],
+            ),
+        ]
+        completions = FakeStreamingCompletions([chunks])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        registry = FakeRegistry()
+        settings = Settings.load(self.root, provider="deepseek", api_key="test-key")
+        audit = AuditLogger(self.root / "tests" / "runtime_output" / "provider-stream-audit")
+
+        events = list(AgentRuntime(settings, registry, audit, client=client).run_events("检查工程"))
+
+        self.assertEqual([event["text"] for event in events if event["type"] == "delta"], ["流", "式"])
+        self.assertEqual(events[-1]["type"], "done")
+        self.assertEqual(events[-1]["answer"], "流式")
+        self.assertTrue(completions.requests[0]["stream"])
 
 
 if __name__ == "__main__":

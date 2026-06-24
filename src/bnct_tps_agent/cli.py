@@ -29,10 +29,18 @@ def _runtime(args: argparse.Namespace) -> tuple[Settings, ToolRegistry, AuditLog
         provider=getattr(args, "provider", None),
         model=getattr(args, "model", None),
         interactive=interactive,
+        web_search_mode=getattr(args, "web_search", None),
+        web_search_network=getattr(args, "web_search_network", None),
     )
     audit = AuditLogger(settings.audit_dir)
     policy = SafetyPolicy(_approval if interactive else None)
-    registry = ToolRegistry(settings.root, policy, audit)
+    registry = ToolRegistry(
+        settings.root,
+        policy,
+        audit,
+        web_search_mode=settings.web_search_mode,
+        web_search_network=settings.web_search_network,
+    )
     return settings, registry, audit
 
 
@@ -92,6 +100,8 @@ def build_parser() -> argparse.ArgumentParser:
     def common(subparser: argparse.ArgumentParser, *, model: bool = False) -> None:
         subparser.add_argument("--root", default=".", help="Agent 可访问的工程根目录")
         subparser.add_argument("--non-interactive", action="store_true", help="拒绝所有需要人工批准的动作")
+        subparser.add_argument("--web-search", choices=("auto", "ask", "off"), help="Control public web search mode")
+        subparser.add_argument("--web-search-network", choices=("auto", "direct", "system"), help="Control web search network path")
         if model:
             subparser.add_argument("--provider", choices=("openai", "deepseek", "kimi"), help="模型供应商")
             subparser.add_argument("--model", help="覆盖供应商的默认模型")

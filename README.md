@@ -13,6 +13,7 @@
 - 本地会话持久化、收藏置顶、搜索、删除和项目级/私有记忆
 - Claude 风格 `SKILL.md` 能力包发现机制，支持 `skills/`、`.agent/skills/`、`.claude/skills/`
 - 右侧 Skill 面板默认装载 `code-review`、`debug`、`run`、`verify`、`dicom-tags`，并支持从本地导入新的 skill
+- 后台 `web-search` skill：支持 `auto`/`ask`/`off` 三种联网搜索模式，默认在需要最新公开知识时自动搜索
 - 支持 OpenAI、DeepSeek、Kimi 三种供应商和各自独立的 Key、模型、Base URL
 - OpenAI Responses API 与兼容 Chat Completions 的多轮工具调用循环
 - 工程文件列举、读取、搜索和经审批的文本写入；绝对路径写入可在人工批准后落到工作区外
@@ -21,6 +22,7 @@
 - `dicom-tags` skill：对上传的 DICOM 附件做本地 tag 解析、Pixel Data 省略、直接标识符脱敏
 - 代码层风险分级：`read`、`write`、`execute`、`clinical`
 - `write`/`execute` 人工确认，`clinical` 无条件阻断
+- `web-search` 默认只用于公开资料；敏感查询或 `ask` 模式会进入人工审批，`off` 模式完全不暴露联网搜索工具
 - JSONL 审计日志，敏感字段脱敏，工具结果只保留摘要和哈希
 - 无 API Key 的离线演示及单元测试
 
@@ -104,6 +106,14 @@ Web 右侧 Skill 面板会显示当前已发现的 skill。点击虚线加号可
 - `run`：启动或执行受控流程，并报告结果。
 - `verify`：用测试、健康检查和界面检查验证改动。
 - `dicom-tags`：解析 DICOM tag，脱敏直接标识符并省略 Pixel Data。
+
+`web-search` 是一个特殊的后台 skill，不显示在右侧 Skill 面板里。用户通常不需要手动点它；Agent 会在问题依赖最新公开知识时自动调用。设置页提供三种模式：
+
+- `Auto`：默认模式；公开、非敏感的最新知识查询可自动搜索。
+- `Ask`：每次搜索前都弹出人工审批。
+- `Off`：不向模型暴露联网搜索工具。
+
+联网搜索不得携带患者标识、API Key、内部路径、私有主机名、私有代码或公司机密内容。答案使用搜索结果时需要给出来源标题和 URL。
 
 ## 快速开始
 

@@ -326,6 +326,8 @@ class BNCTAgentApp:
                 policy,
                 self.audit,
                 event_callback=lambda event: self.events.put(("tool_event", event)),
+                web_search_mode=settings.web_search_mode,
+                web_search_network=settings.web_search_network,
             )
             if settings.api_key:
                 self.runtime = AgentRuntime(settings, self.registry, self.audit)
