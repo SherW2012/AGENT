@@ -198,14 +198,14 @@ def normalize_attachments(raw: Any, skill_registry: SkillRegistry | None = None)
                     **dict(processed.get("stored") or {}),
                 }
             else:
+                kind = "image" if media_type.startswith("image/") else "binary"
                 content = (
-                    f"二进制附件 `{name}` 未作为文本发送给模型。\n"
+                    f"{'图像' if kind == 'image' else '二进制'}附件 `{name}` 未作为可解析文本发送给模型。\n"
                     f"- MIME: {media_type}\n"
                     f"- 文件大小: {original_size} bytes\n"
                     f"- 上传片段: {len(binary)} bytes\n"
-                    "如果需要解析该格式，请先转换为文本或使用专门的解析工具。"
+                    "如果需要内容级分析，请使用支持该格式的专门 skill，或提供可读文本说明。"
                 )
-                kind = "binary"
                 extra = {"kind": kind, "uploadedBytes": len(binary), "originalSize": original_size}
         else:
             content = str(item.get("content") or "")

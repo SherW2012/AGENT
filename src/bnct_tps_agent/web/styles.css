@@ -645,6 +645,13 @@ svg {
 .drawer-header h2,
 .modal-header h2 { margin: 0; font-size: 16px; font-weight: 680; letter-spacing: -0.01em; }
 .workspace-heading h2 { max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-help {
+  max-width: 220px;
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
 .workspace-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .workspace-switch-button {
   display: grid;

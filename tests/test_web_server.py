@@ -104,6 +104,7 @@ class WebServerTests(unittest.TestCase):
         self.assertIn('id="browse-folder-button"', body)
         self.assertIn('id="workspace-switch-button"', body)
         self.assertIn('id="import-skill-button"', body)
+        self.assertIn("点击一个 Skill，会把使用说明填入输入框", body)
         self.assertIn('id="session-list"', body)
         self.assertIn('id="attachment-input"', body)
         self.assertIn('id="settings-button"', body)
@@ -111,6 +112,8 @@ class WebServerTests(unittest.TestCase):
         self.assertIn('name="web-search-network"', body)
         self.assertIn('data-settings-section="connection"', body)
         self.assertIn('data-settings-section="web-search"', body)
+        self.assertIn("用于获取公开网页上的近期信息", body)
+        self.assertNotIn("搜索是 Agent 能力的一部分", body)
         self.assertNotIn('id="memory-pill"', body)
         self.assertIn("SKILLS", body)
         self.assertIn("了解边界", body)
@@ -136,13 +139,19 @@ class WebServerTests(unittest.TestCase):
         self.assertIn("function renderSkills", script)
         self.assertIn("function streamApi", script)
         self.assertIn("function appendAssistantDraft", script)
+        self.assertIn("function clipboardFiles", script)
+        self.assertIn("function stageSkillPrompt", script)
         self.assertIn("/api/chat-stream", script)
         self.assertIn("webSearchMode", script)
         self.assertIn("webSearchNetwork", script)
         self.assertIn("LONG_PASTE_CHAR_THRESHOLD", script)
         self.assertIn("function handlePromptPaste", script)
         self.assertIn('kind: "pasted"', script)
+        self.assertIn('kind: "image"', script)
+        self.assertIn("activityList.classList.toggle", script)
+        self.assertNotIn("sendTask(prompt)", script)
         self.assertIn(".skill-import-card", styles)
+        self.assertIn(".panel-help", styles)
         self.assertIn(".activity-panel", styles)
         self.assertIn(".sidebar-settings-button", styles)
         self.assertIn(".settings-tab", styles)
@@ -219,6 +228,24 @@ class WebServerTests(unittest.TestCase):
         self.assertIn("| (0010,0010) | PatientName | PN | [已脱敏] |", summary)
         self.assertNotIn("Wang^Test", summary)
         self.assertNotIn("PID123", summary)
+
+    def test_image_attachment_is_labeled_without_text_extraction(self):
+        content = base64.b64encode(b"fake-png").decode("ascii")
+        prompt_attachments, stored = normalize_attachments(
+            [
+                {
+                    "name": "screen.png",
+                    "type": "image/png",
+                    "size": 8,
+                    "originalSize": 8,
+                    "encoding": "base64",
+                    "content": content,
+                }
+            ],
+            SkillRegistry(self.root),
+        )
+        self.assertEqual(stored[0]["kind"], "image")
+        self.assertIn("图像附件 `screen.png`", prompt_attachments[0]["content"])
 
     def test_skill_registry_loads_and_reads_dicom_skill(self):
         registry = SkillRegistry(self.root)

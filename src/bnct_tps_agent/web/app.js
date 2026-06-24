@@ -3,6 +3,7 @@
 const token = new URLSearchParams(window.location.hash.slice(1)).get("token") || "";
 const MAX_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_BYTES = 750_000;
+const MAX_IMAGE_ATTACHMENT_BYTES = 1_500_000;
 const MAX_DICOM_HEADER_BYTES = 1_500_000;
 const LONG_PASTE_CHAR_THRESHOLD = 4_000;
 const MAX_PASTED_TEXT_CHARS = 180_000;
@@ -450,7 +451,7 @@ function renderMarkdown(container, text) {
 
 function attachmentLabel(item) {
   const size = Number(item.size || 0);
-  const kind = item.kind === "dicom" ? "DICOM" : item.kind === "binary" ? "Binary" : item.kind === "pasted" ? "Pasted" : "Text";
+  const kind = item.kind === "dicom" ? "DICOM" : item.kind === "image" ? "Image" : item.kind === "binary" ? "Binary" : item.kind === "pasted" ? "Pasted" : "Text";
   const sizeText = size > 1024 ? `${Math.round(size / 1024)} KB` : `${size} B`;
   return `${item.name || "附件"} · ${kind} · ${sizeText}`;
 }
@@ -598,7 +599,9 @@ function renderActivity() {
   const current = waiting || active || state.activeDraft.activities.at(-1);
   state.activeDraft.activityTitle.textContent = current?.label || "正在处理";
   state.activeDraft.activityList.replaceChildren();
-  state.activeDraft.activities.slice(-6).forEach((item) => {
+  const history = state.activeDraft.activities.filter((item) => item !== current).slice(-5);
+  state.activeDraft.activityList.classList.toggle("hidden", history.length === 0);
+  history.forEach((item) => {
     const row = document.createElement("div");
     row.className = `activity-item ${item.status}`;
     const dot = document.createElement("span");
@@ -825,6 +828,23 @@ function skillInitial(skill) {
   return (name[0] || "?").toUpperCase();
 }
 
+function stageSkillPrompt(skill) {
+  const displayName = skill.displayName || skill.name || "skill";
+  const defaultPrompt = skill.defaultPrompt || `请读取并使用 ${skill.name} skill。`;
+  const scaffold = [
+    `使用 ${displayName} skill。`,
+    "",
+    defaultPrompt,
+    "",
+    "请补充具体目标、对象、文件或约束：",
+  ].join("\n");
+  const current = elements.prompt.value.trim();
+  elements.prompt.value = current ? `${current}\n\n${scaffold}` : scaffold;
+  resizePrompt();
+  elements.prompt.focus();
+  showToast(`已将 ${displayName} 的使用说明放入输入框，请补充目标后发送。`);
+}
+
 function renderSkills() {
   elements.skillList.replaceChildren();
   const skills = state.skills || [];
@@ -852,8 +872,7 @@ function renderSkills() {
     copy.append(title, subtitle);
     button.append(icon, copy);
     button.addEventListener("click", () => {
-      const prompt = skill.defaultPrompt || `请读取并使用 ${skill.name} skill 处理当前任务。`;
-      sendTask(prompt);
+      stageSkillPrompt(skill);
     });
     elements.skillList.append(button);
   });
@@ -907,6 +926,40 @@ function pastedAttachmentName() {
   return `pasted-${stamp}.txt`;
 }
 
+function pastedFileName(mediaType = "application/octet-stream") {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const extension = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "text/plain": "txt",
+    "text/markdown": "md",
+  }[mediaType] || "bin";
+  return `pasted-${stamp}.${extension}`;
+}
+
+function fileDisplayName(file) {
+  return file.name || pastedFileName(file.type);
+}
+
+function clipboardFiles(clipboard) {
+  const files = [];
+  const seen = new Set();
+  const addFile = (file) => {
+    if (!file) return;
+    const key = `${file.name}|${file.type}|${file.size}|${file.lastModified}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    files.push(file);
+  };
+  Array.from(clipboard.files || []).forEach(addFile);
+  Array.from(clipboard.items || []).forEach((item) => {
+    if (item.kind === "file") addFile(item.getAsFile());
+  });
+  return files;
+}
+
 function addPastedTextAttachment(text) {
   if (state.pendingAttachments.length >= MAX_ATTACHMENTS) {
     showToast(`一次最多上传 ${MAX_ATTACHMENTS} 个附件`, "error");
@@ -934,9 +987,15 @@ function addPastedTextAttachment(text) {
   return true;
 }
 
-function handlePromptPaste(event) {
+async function handlePromptPaste(event) {
   const clipboard = event.clipboardData;
-  if (!clipboard || clipboard.files?.length) return;
+  if (!clipboard) return;
+  const files = clipboardFiles(clipboard);
+  if (files.length) {
+    event.preventDefault();
+    await addAttachments(files);
+    return;
+  }
   const text = clipboard.getData("text/plain");
   if (!text || text.length < LONG_PASTE_CHAR_THRESHOLD) return;
   event.preventDefault();
@@ -983,11 +1042,15 @@ async function addAttachments(files) {
 }
 
 function isDicomFile(file) {
-  return DICOM_ATTACHMENT_PATTERN.test(file.name) || ["application/dicom", "application/x-dicom"].includes(file.type);
+  return DICOM_ATTACHMENT_PATTERN.test(fileDisplayName(file)) || ["application/dicom", "application/x-dicom"].includes(file.type);
 }
 
 function isTextFile(file) {
-  return file.type.startsWith("text/") || TEXT_ATTACHMENT_PATTERN.test(file.name);
+  return file.type.startsWith("text/") || TEXT_ATTACHMENT_PATTERN.test(fileDisplayName(file));
+}
+
+function isImageFile(file) {
+  return file.type.startsWith("image/");
 }
 
 function arrayBufferToBase64(buffer) {
@@ -1002,11 +1065,12 @@ function arrayBufferToBase64(buffer) {
 }
 
 async function readAttachment(file) {
+  const name = fileDisplayName(file);
   if (isDicomFile(file)) {
     const slice = file.slice(0, Math.min(file.size, MAX_DICOM_HEADER_BYTES));
     const content = arrayBufferToBase64(await slice.arrayBuffer());
     return {
-      name: file.name,
+      name,
       type: file.type || "application/dicom",
       size: slice.size,
       originalSize: file.size,
@@ -1020,7 +1084,7 @@ async function readAttachment(file) {
       throw new Error(`文本附件超过 ${Math.round(MAX_ATTACHMENT_BYTES / 1024)} KB`);
     }
     return {
-      name: file.name,
+      name,
       type: file.type || "text/plain",
       size: file.size,
       encoding: "text",
@@ -1028,11 +1092,25 @@ async function readAttachment(file) {
       content: await file.text(),
     };
   }
+  if (isImageFile(file)) {
+    if (file.size > MAX_IMAGE_ATTACHMENT_BYTES) {
+      throw new Error(`图片附件超过 ${Math.round(MAX_IMAGE_ATTACHMENT_BYTES / 1024)} KB`);
+    }
+    return {
+      name,
+      type: file.type || "application/octet-stream",
+      size: file.size,
+      originalSize: file.size,
+      encoding: "base64",
+      kind: "image",
+      content: arrayBufferToBase64(await file.arrayBuffer()),
+    };
+  }
   if (file.size > MAX_ATTACHMENT_BYTES) {
     throw new Error(`二进制附件超过 ${Math.round(MAX_ATTACHMENT_BYTES / 1024)} KB`);
   }
   return {
-    name: file.name,
+    name,
     type: file.type || "application/octet-stream",
     size: file.size,
     originalSize: file.size,
