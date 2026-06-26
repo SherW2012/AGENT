@@ -11,6 +11,7 @@ go through the same human approval as other writes.
 """
 from __future__ import annotations
 
+import re
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,10 @@ from typing import Any
 MAX_PARAGRAPHS = 400
 MAX_SLIDES = 60
 MAX_TEXT_CHARS = 20_000
+MAX_SHEETS = 12
+MAX_ROWS = 5_000
+MAX_COLS = 256
+_NUMERIC_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
 
 def _xml_escape(value: str) -> str:
@@ -367,4 +372,139 @@ def create_powerpoint(root: Path, path: str, slides: list[dict[str, Any]] | None
         "slides": count,
         "bytes": target.stat().st_size,
         "message": "PPT 已生成（OOXML，无第三方依赖）。请用 PowerPoint/WPS 打开核对。",
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Excel (.xlsx)
+# --------------------------------------------------------------------------- #
+
+_XLSX_ROOT_RELS = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+    '</Relationships>'
+)
+
+_SHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+
+def _col_letter(index: int) -> str:
+    letters = ""
+    index += 1
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters
+
+
+def _xlsx_cell(ref: str, value: Any) -> str:
+    if isinstance(value, bool):
+        value = "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)):
+        return f'<c r="{ref}"><v>{value}</v></c>'
+    text = str(value)
+    if text and _NUMERIC_RE.fullmatch(text):
+        return f'<c r="{ref}"><v>{text}</v></c>'
+    return f'<c r="{ref}" t="inlineStr"><is><t xml:space="preserve">{_xml_escape(text)}</t></is></c>'
+
+
+def _xlsx_sheet(rows: list[list[Any]]) -> str:
+    row_xml: list[str] = []
+    for r_index, row in enumerate(rows[:MAX_ROWS], start=1):
+        cells = "".join(
+            _xlsx_cell(f"{_col_letter(c_index)}{r_index}", value)
+            for c_index, value in enumerate(list(row)[:MAX_COLS])
+        )
+        row_xml.append(f'<row r="{r_index}">{cells}</row>')
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<worksheet xmlns="{_SHEET_NS}"><sheetData>{"".join(row_xml)}</sheetData></worksheet>'
+    )
+
+
+def create_excel(root: Path, path: str, sheets: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Create a .xlsx workbook. `sheets` is a list of {name, rows:[[cell,...],...]}.
+
+    Cells may be strings or numbers; numeric-looking strings become numbers."""
+    books = list(sheets or [])
+    if not books:
+        raise ValueError("至少需要一个工作表")
+    if len(books) > MAX_SHEETS:
+        raise ValueError(f"工作表数量过多，最多 {MAX_SHEETS} 个")
+    target = _resolve_output_path(root, path, ".xlsx")
+
+    normalized: list[tuple[str, list[list[Any]]]] = []
+    used_names: set[str] = set()
+    for index, book in enumerate(books):
+        if isinstance(book, dict):
+            name = str(book.get("name") or f"Sheet{index + 1}").strip()[:31] or f"Sheet{index + 1}"
+            rows = book.get("rows") or []
+        else:
+            name = f"Sheet{index + 1}"
+            rows = book
+        # Excel forbids duplicate sheet names and a few characters.
+        name = re.sub(r"[\\/?*\[\]:]", " ", name).strip()[:31] or f"Sheet{index + 1}"
+        base = name
+        suffix = 2
+        while name.lower() in used_names:
+            name = f"{base[:28]}_{suffix}"
+            suffix += 1
+        used_names.add(name.lower())
+        normalized.append((name, [list(r) for r in rows]))
+
+    sheet_overrides = "".join(
+        f'<Override PartName="/xl/worksheets/sheet{i + 1}.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        for i in range(len(normalized))
+    )
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        f"{sheet_overrides}"
+        "</Types>"
+    )
+    sheet_entries = "".join(
+        f'<sheet name="{_xml_escape(name)}" sheetId="{i + 1}" r:id="rId{i + 1}"/>'
+        for i, (name, _rows) in enumerate(normalized)
+    )
+    workbook = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<workbook xmlns="{_SHEET_NS}" xmlns:r="{_R_NS}">'
+        f'<sheets>{sheet_entries}</sheets></workbook>'
+    )
+    workbook_rels_inner = "".join(
+        f'<Relationship Id="rId{i + 1}" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+        f'Target="worksheets/sheet{i + 1}.xml"/>'
+        for i in range(len(normalized))
+    )
+    workbook_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        f"{workbook_rels_inner}</Relationships>"
+    )
+
+    parts: dict[str, str] = {
+        "[Content_Types].xml": content_types,
+        "_rels/.rels": _XLSX_ROOT_RELS,
+        "xl/workbook.xml": workbook,
+        "xl/_rels/workbook.xml.rels": workbook_rels,
+    }
+    total_rows = 0
+    for i, (_name, rows) in enumerate(normalized):
+        parts[f"xl/worksheets/sheet{i + 1}.xml"] = _xlsx_sheet(rows)
+        total_rows += min(len(rows), MAX_ROWS)
+
+    _write_zip(target, parts)
+    return {
+        "path": target.relative_to(root.resolve()).as_posix(),
+        "format": "xlsx",
+        "sheets": len(normalized),
+        "rows": total_rows,
+        "bytes": target.stat().st_size,
+        "message": "Excel 已生成（OOXML，无第三方依赖）。请用 Excel/WPS 打开核对。",
     }

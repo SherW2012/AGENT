@@ -9,6 +9,8 @@ const LONG_PASTE_CHAR_THRESHOLD = 4_000;
 const MAX_PASTED_TEXT_CHARS = 180_000;
 const TEXT_ATTACHMENT_PATTERN = /\.(txt|md|json|csv|log|py|js|ts|tsx|html|css|xml|yaml|yml|toml|ini|cfg)$/i;
 const DICOM_ATTACHMENT_PATTERN = /\.(dcm|dicom)$/i;
+const ARCHIVE_ATTACHMENT_PATTERN = /\.zip$/i;
+const MAX_ARCHIVE_ATTACHMENT_BYTES = 1_500_000;
 
 const state = {
   config: null,
@@ -581,25 +583,79 @@ function renderMarkdown(container, text) {
   }
 }
 
+function attachmentKindLabel(item) {
+  return {
+    dicom: "DICOM",
+    image: "图片",
+    binary: "文件",
+    archive: "压缩包",
+    pasted: "粘贴文本",
+    text: "文本",
+  }[item.kind] || "文本";
+}
+
+function attachmentSizeText(item) {
+  const size = Number(item.size || item.originalSize || 0);
+  return size >= 1024 ? `${Math.round(size / 1024)} KB` : `${size} B`;
+}
+
+function attachmentExt(item) {
+  const name = String(item.name || "");
+  const dot = name.lastIndexOf(".");
+  if (dot >= 0 && dot < name.length - 1) return name.slice(dot + 1).toUpperCase().slice(0, 4);
+  return { image: "IMG", archive: "ZIP", dicom: "DCM", binary: "BIN", pasted: "TXT" }[item.kind] || "TXT";
+}
+
 function attachmentLabel(item) {
-  const size = Number(item.size || 0);
-  const kind = item.kind === "dicom" ? "DICOM" : item.kind === "image" ? "Image" : item.kind === "binary" ? "Binary" : item.kind === "pasted" ? "Pasted" : "Text";
-  const sizeText = size > 1024 ? `${Math.round(size / 1024)} KB` : `${size} B`;
-  return `${item.name || "附件"} · ${kind} · ${sizeText}`;
+  return `${item.name || "附件"} · ${attachmentKindLabel(item)} · ${attachmentSizeText(item)}`;
+}
+
+function buildAttachmentCard(item, onRemove) {
+  const card = document.createElement("div");
+  card.className = "attachment-card";
+  card.title = attachmentLabel(item);
+
+  const thumb = document.createElement("div");
+  thumb.className = "attachment-thumb";
+  if (item.kind === "image" && item.content && item.encoding === "base64") {
+    const img = document.createElement("img");
+    img.src = `data:${item.type || "image/png"};base64,${item.content}`;
+    img.alt = item.name || "image";
+    thumb.classList.add("is-image");
+    thumb.append(img);
+  } else {
+    thumb.classList.add(`kind-${item.kind || "text"}`);
+    thumb.textContent = attachmentExt(item);
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "attachment-meta";
+  const name = document.createElement("div");
+  name.className = "attachment-cardname";
+  name.textContent = item.name || "附件";
+  const sub = document.createElement("div");
+  sub.className = "attachment-sub";
+  sub.textContent = `${attachmentKindLabel(item)} · ${attachmentSizeText(item)}`;
+  meta.append(name, sub);
+  card.append(thumb, meta);
+
+  if (onRemove) {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "attachment-remove";
+    remove.title = "移除附件";
+    remove.textContent = "×";
+    remove.addEventListener("click", onRemove);
+    card.append(remove);
+  }
+  return card;
 }
 
 function renderMessageAttachments(container, attachments = []) {
   if (!attachments.length) return;
   const wrap = document.createElement("div");
   wrap.className = "message-attachments";
-  attachments.forEach((item) => {
-    const chip = document.createElement("span");
-    chip.className = "message-attachment";
-    const label = attachmentLabel(item);
-    chip.textContent = label;
-    chip.title = label;
-    wrap.append(chip);
-  });
+  attachments.forEach((item) => wrap.append(buildAttachmentCard(item, null)));
   container.append(wrap);
 }
 
@@ -725,6 +781,7 @@ function toolDisplayName(name) {
     summarize_plan_snapshot: "摘要计划快照",
     create_word_document: "生成 Word 文档",
     create_powerpoint: "生成 PPT",
+    create_excel: "生成 Excel",
     read_agent_memory: "读取记忆",
     append_agent_memory: "写入记忆",
   };
@@ -1416,23 +1473,11 @@ function renderPendingAttachments() {
   elements.attachmentList.replaceChildren();
   elements.attachmentList.classList.toggle("hidden", state.pendingAttachments.length === 0);
   state.pendingAttachments.forEach((item, index) => {
-    const chip = document.createElement("span");
-    chip.className = "attachment-chip";
-    const fullLabel = attachmentLabel(item);
-    chip.title = fullLabel;
-    const label = document.createElement("span");
-    label.className = "attachment-name";
-    label.textContent = fullLabel;
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.textContent = "×";
-    remove.title = "移除附件";
-    remove.addEventListener("click", () => {
+    const card = buildAttachmentCard(item, () => {
       state.pendingAttachments.splice(index, 1);
       renderPendingAttachments();
     });
-    chip.append(label, remove);
-    elements.attachmentList.append(chip);
+    elements.attachmentList.append(card);
   });
 }
 
@@ -1516,6 +1561,20 @@ async function readAttachment(file) {
       originalSize: file.size,
       encoding: "base64",
       kind: "image",
+      content: arrayBufferToBase64(await file.arrayBuffer()),
+    };
+  }
+  if (ARCHIVE_ATTACHMENT_PATTERN.test(name) || ["application/zip", "application/x-zip-compressed"].includes(file.type)) {
+    if (file.size > MAX_ARCHIVE_ATTACHMENT_BYTES) {
+      throw new Error(`压缩包附件超过 ${Math.round(MAX_ARCHIVE_ATTACHMENT_BYTES / 1024)} KB`);
+    }
+    return {
+      name,
+      type: file.type || "application/zip",
+      size: file.size,
+      originalSize: file.size,
+      encoding: "base64",
+      kind: "archive",
       content: arrayBufferToBase64(await file.arrayBuffer()),
     };
   }

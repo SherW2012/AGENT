@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import shutil
@@ -5,6 +6,7 @@ import threading
 import unittest
 import base64
 import uuid
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -257,6 +259,37 @@ class WebServerTests(unittest.TestCase):
         self.assertIn("| (0010,0010) | PatientName | PN | [已脱敏] |", summary)
         self.assertNotIn("Wang^Test", summary)
         self.assertNotIn("PID123", summary)
+
+    def test_zip_archive_is_inspected_by_background_skill(self):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("notes/readme.txt", "hello from archive")
+            archive.writestr("data.bin", b"\x00\x01\x02\x03")
+        content = base64.b64encode(buffer.getvalue()).decode("ascii")
+        prompt_attachments, stored = normalize_attachments(
+            [
+                {
+                    "name": "bundle.zip",
+                    "type": "application/zip",
+                    "size": len(content),
+                    "originalSize": buffer.tell(),
+                    "encoding": "base64",
+                    "content": content,
+                }
+            ],
+            SkillRegistry(self.root),
+        )
+        self.assertEqual(stored[0]["kind"], "archive")
+        self.assertEqual(stored[0]["skill"], "archive-extract")
+        summary = prompt_attachments[0]["content"]
+        self.assertIn("notes/readme.txt", summary)
+        self.assertIn("hello from archive", summary)
+
+    def test_archive_skill_is_background_only(self):
+        registry = SkillRegistry(self.root)
+        panel = {item["name"] for item in registry.public_catalog()}
+        self.assertNotIn("archive-extract", panel)
+        self.assertIn("archive-extract", {item["name"] for item in registry.public_catalog(include_background=True)})
 
     def test_image_attachment_is_labeled_without_text_extraction(self):
         content = base64.b64encode(b"fake-png").decode("ascii")

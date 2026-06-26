@@ -108,12 +108,15 @@ Web 右侧 Skill 面板会显示当前已发现的 skill。点击虚线加号可
 - `dicom-tags`：解析 DICOM tag，脱敏直接标识符并省略 Pixel Data。
 - `create-word`：在工作目录生成 `.docx` Word 文档。
 - `create-ppt`：在工作目录生成 `.pptx` 演示文稿。
+- `create-excel`：在工作目录生成 `.xlsx` Excel 表格。
+
+`archive-extract` 是一个**后台 skill**（不显示在面板里，类似 `web-search`）：上传 `.zip` 时自动在内存里解析压缩包，列出文件并预览文本成员，全程只读、不落盘，并对条目数、单文件读取量和总预览量做上限以抵御 zip 炸弹。
 
 右侧面板只显示**常用 Skill**（最多 7 个）；点击面板右上角“全部”会弹出全部 Skill 的网格对话框，可在那里设为常用（★）、删除本地导入的 skill，或导入新的 skill。Skill 与工作目录相互独立：内置 skill 随应用走，导入的 skill 存在用户数据目录，切换工作目录不会改变 skill 列表。
 
 ### Word / PPT 生成
 
-`create-word` 和 `create-ppt` 通过 `create_word_document` / `create_powerpoint` 两个写入类工具生成 Office 文档。文件采用开放的 Office Open XML 标准（ECMA-376 / ISO/IEC 29500），完全用 Python 标准库 `zipfile` 拼装，不引入任何第三方库，也不附带微软的字体或模板——因此**不存在版权或授权问题**。生成属于写操作，需人工审批；不得把患者标识或密钥写入文档。
+`create-word`、`create-ppt`、`create-excel` 通过 `create_word_document` / `create_powerpoint` / `create_excel` 三个写入类工具生成 Office 文档。文件采用开放的 Office Open XML 标准（ECMA-376 / ISO/IEC 29500），完全用 Python 标准库 `zipfile` 拼装，不引入任何第三方库，也不附带微软的字体或模板——因此**不存在版权或授权问题**。生成属于写操作，需人工审批；不得把患者标识或密钥写入文档。
 
 `web-search` 是一个特殊的后台 skill，不显示在右侧 Skill 面板里。用户通常不需要手动点它；Agent 会在问题依赖最新公开知识时自动调用。设置页提供三种模式：
 

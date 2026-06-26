@@ -14,7 +14,7 @@ from .project_tools import (
     search_project_text,
     write_project_text,
 )
-from .office_tools import create_powerpoint, create_word_document
+from .office_tools import create_excel, create_powerpoint, create_word_document
 from .safety import PolicyDenied, Risk, SafetyPolicy
 from .skills import SkillRegistry
 from .tps_tools import summarize_plan_snapshot, validate_plan_snapshot
@@ -232,6 +232,36 @@ class ToolRegistry:
                 },
                 Risk.WRITE,
                 lambda root, path, slides: create_powerpoint(root, path, slides),
+            ),
+            Tool(
+                "create_excel",
+                "Create a .xlsx Excel workbook in the workspace. Each sheet is an object with a name and rows; "
+                "each row is a list of cell strings (numeric-looking strings become numbers). Output is "
+                "standards-based OOXML; no patient identifiers or secrets may be written.",
+                {
+                    **object_schema,
+                    "properties": {
+                        "path": {"type": "string"},
+                        "sheets": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "name": {"type": "string"},
+                                    "rows": {
+                                        "type": "array",
+                                        "items": {"type": "array", "items": {"type": "string"}},
+                                    },
+                                },
+                                "required": ["name", "rows"],
+                            },
+                        },
+                    },
+                    "required": ["path", "sheets"],
+                },
+                Risk.WRITE,
+                lambda root, path, sheets: create_excel(root, path, sheets),
             ),
         ]
         if self.web_search_mode != "off":

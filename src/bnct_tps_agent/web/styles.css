@@ -567,6 +567,70 @@ svg {
   cursor: pointer;
 }
 .attachment-chip button:hover { background: var(--panel-3); color: var(--text); }
+/* Attachment cards: image thumbnails + file-type badges (Claude-style effect). */
+.attachment-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: 230px;
+  padding: 7px 9px 7px 7px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  box-shadow: 0 2px 8px rgba(20, 40, 72, 0.05);
+}
+.attachment-thumb {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+}
+.attachment-thumb.is-image { background: var(--panel-3); }
+.attachment-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.attachment-thumb.kind-image { background: var(--accent); }
+.attachment-thumb.kind-archive { background: var(--amber); }
+.attachment-thumb.kind-dicom { background: var(--violet); }
+.attachment-thumb.kind-binary { background: var(--muted); }
+.attachment-thumb.kind-text,
+.attachment-thumb.kind-pasted { background: var(--green); }
+.attachment-meta { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.attachment-cardname {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-sub { color: var(--muted); font-size: 10.5px; }
+.attachment-remove {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+}
+.attachment-remove:hover { background: var(--panel-3); color: var(--text); }
+.message-attachments .attachment-card { max-width: 220px; box-shadow: none; background: var(--panel-2); }
+.message-attachments .attachment-thumb { width: 32px; height: 32px; }
+
 .composer {
   width: min(860px, 100%);
   margin: 0 auto;

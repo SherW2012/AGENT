@@ -4,7 +4,7 @@ import uuid
 import zipfile
 from pathlib import Path
 
-from bnct_tps_agent.office_tools import create_powerpoint, create_word_document
+from bnct_tps_agent.office_tools import create_excel, create_powerpoint, create_word_document
 
 
 class OfficeToolsTests(unittest.TestCase):
@@ -74,6 +74,37 @@ class OfficeToolsTests(unittest.TestCase):
     def test_powerpoint_requires_at_least_one_slide(self):
         with self.assertRaises(ValueError):
             create_powerpoint(self.root, "deck", slides=[])
+
+    def test_excel_is_a_valid_ooxml_zip(self):
+        result = create_excel(
+            self.root,
+            "data",
+            sheets=[
+                {"name": "汇总", "rows": [["名称", "数量"], ["剂量", "42"], ["备注 <x>", "ok"]]},
+                {"name": "汇总", "rows": [["second", "sheet"]]},
+            ],
+        )
+        self.assertEqual(result["format"], "xlsx")
+        self.assertEqual(result["sheets"], 2)
+        target = self.root / "data.xlsx"
+        with zipfile.ZipFile(target) as archive:
+            self.assertIsNone(archive.testzip())
+            names = set(archive.namelist())
+            self.assertIn("xl/workbook.xml", names)
+            self.assertIn("xl/worksheets/sheet1.xml", names)
+            self.assertIn("xl/worksheets/sheet2.xml", names)
+            sheet1 = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
+            workbook = archive.read("xl/workbook.xml").decode("utf-8")
+        # Numeric-looking strings become numbers; text is escaped inline.
+        self.assertIn("<v>42</v>", sheet1)
+        self.assertIn("名称", sheet1)
+        self.assertIn("备注 &lt;x&gt;", sheet1)
+        # Duplicate sheet names are de-duplicated.
+        self.assertIn("汇总_2", workbook)
+
+    def test_excel_requires_a_sheet(self):
+        with self.assertRaises(ValueError):
+            create_excel(self.root, "data", sheets=[])
 
 
 if __name__ == "__main__":
