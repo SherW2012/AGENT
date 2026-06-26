@@ -1,13 +1,16 @@
-"""Generate Word (.docx) and PowerPoint (.pptx) files using only the stdlib.
+"""Generate styled Word (.docx), PowerPoint (.pptx) and Excel (.xlsx) files.
 
-.docx/.pptx are the open Office Open XML (OOXML) format, standardized as
-ECMA-376 / ISO/IEC 29500. Producing them is just writing a small set of XML
-parts into a ZIP container, so there is no third-party dependency and no
-licensing or intellectual-property concern -- we ship none of Microsoft's
-fonts, templates, or code, only standards-defined markup.
+These are the open Office Open XML (OOXML) formats, standardized as ECMA-376 /
+ISO/IEC 29500. We assemble them with the Python standard library only (zipfile +
+XML strings): no third-party dependency and no licensing/IP concern -- we ship
+none of Microsoft's fonts, templates, or code, only standards-defined markup.
 
-These are WRITE-risk tools: they create files under the workspace and therefore
-go through the same human approval as other writes.
+The files are not bare text: they carry real style definitions (heading styles,
+colors, bullet lists, table-like header fills, banded rows, slide accent bands)
+so the output looks like a designed document, using the app's blue accent.
+
+These are WRITE-risk tools: they create files under the workspace and go through
+the same human approval as other writes.
 """
 from __future__ import annotations
 
@@ -24,6 +27,15 @@ MAX_SHEETS = 12
 MAX_ROWS = 5_000
 MAX_COLS = 256
 _NUMERIC_RE = re.compile(r"-?\d+(?:\.\d+)?")
+
+# Shared palette (matches the UI's corporate blue theme).
+ACCENT = "00408E"
+ACCENT_DARK = "1F3A5F"
+TEXT_DARK = "1F3A5F"
+CODE_BLUE = "0B4C8F"
+BAND_LIGHT = "EEF3F9"
+BORDER_GREY = "D0D9E6"
+EA_FONT = "微软雅黑"  # Microsoft YaHei, for CJK text
 
 
 def _xml_escape(value: str) -> str:
@@ -59,38 +71,108 @@ def _write_zip(target: Path, parts: dict[str, str]) -> None:
             archive.writestr(name, content)
 
 
+_R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
+_W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_SHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+
 # --------------------------------------------------------------------------- #
 # Word (.docx)
 # --------------------------------------------------------------------------- #
 
-_DOCX_CONTENT_TYPES = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-<Default Extension="xml" ContentType="application/xml"/>
-<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
-</Types>"""
+_DOCX_CONTENT_TYPES = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+    '<Default Extension="xml" ContentType="application/xml"/>'
+    '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+    '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+    '<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>'
+    "</Types>"
+)
 
-_DOCX_ROOT_RELS = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
-</Relationships>"""
+_DOCX_ROOT_RELS = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+    "</Relationships>"
+)
 
-_W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_DOCX_DOCUMENT_RELS = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+    '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>'
+    "</Relationships>"
+)
+
+_DOCX_STYLES = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    f'<w:styles xmlns:w="{_W_NS}">'
+    '<w:docDefaults><w:rPrDefault><w:rPr>'
+    f'<w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="{EA_FONT}" w:cs="Calibri"/>'
+    '<w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr></w:rPrDefault>'
+    '<w:pPrDefault><w:pPr><w:spacing w:after="160" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault>'
+    '</w:docDefaults>'
+    '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>'
+    '<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/>'
+    '<w:pPr><w:spacing w:after="160"/>'
+    f'<w:pBdr><w:bottom w:val="single" w:sz="18" w:space="6" w:color="{ACCENT}"/></w:pBdr></w:pPr>'
+    f'<w:rPr><w:b/><w:color w:val="{ACCENT}"/><w:sz w:val="48"/><w:szCs w:val="48"/></w:rPr></w:style>'
+    '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/>'
+    '<w:pPr><w:keepNext/><w:spacing w:before="240" w:after="80"/></w:pPr>'
+    f'<w:rPr><w:b/><w:color w:val="{ACCENT}"/><w:sz w:val="32"/><w:szCs w:val="32"/></w:rPr></w:style>'
+    '<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/>'
+    '<w:pPr><w:keepNext/><w:spacing w:before="200" w:after="60"/></w:pPr>'
+    f'<w:rPr><w:b/><w:color w:val="{ACCENT_DARK}"/><w:sz w:val="26"/><w:szCs w:val="26"/></w:rPr></w:style>'
+    '<w:style w:type="paragraph" w:styleId="ListBullet"><w:name w:val="List Bullet"/><w:basedOn w:val="Normal"/>'
+    '<w:pPr><w:numPr><w:numId w:val="1"/></w:numPr><w:spacing w:after="60"/></w:pPr></w:style>'
+    '</w:styles>'
+)
+
+_DOCX_NUMBERING = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    f'<w:numbering xmlns:w="{_W_NS}">'
+    '<w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="1"/>'
+    '<w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:lvlJc w:val="left"/>'
+    '<w:pPr><w:ind w:left="420" w:hanging="220"/></w:pPr>'
+    '<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:hint="default"/></w:rPr></w:lvl></w:abstractNum>'
+    '<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>'
+    '</w:numbering>'
+)
+
+_DOCX_INLINE_RE = re.compile(r"(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)")
 
 
-def _docx_paragraph(text: str, *, bold: bool = False, size_half_points: int | None = None) -> str:
-    run_props = ""
-    if bold or size_half_points:
-        inner = ("<w:b/>" if bold else "") + (
-            f'<w:sz w:val="{int(size_half_points)}"/>' if size_half_points else ""
-        )
-        run_props = f"<w:rPr>{inner}</w:rPr>"
-    safe = _xml_escape(text)
-    return (
-        "<w:p>"
-        f"<w:r>{run_props}<w:t xml:space=\"preserve\">{safe}</w:t></w:r>"
-        "</w:p>"
-    )
+def _docx_run(text: str, *, bold: bool = False, italic: bool = False, code: bool = False) -> str:
+    inner = ("<w:b/>" if bold else "") + ("<w:i/>" if italic else "")
+    if code:
+        inner += f'<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:color w:val="{CODE_BLUE}"/>'
+    run_props = f"<w:rPr>{inner}</w:rPr>" if inner else ""
+    return f'<w:r>{run_props}<w:t xml:space="preserve">{_xml_escape(text)}</w:t></w:r>'
+
+
+def _docx_runs(text: str) -> str:
+    runs: list[str] = []
+    for part in _DOCX_INLINE_RE.split(str(text)):
+        if not part:
+            continue
+        if part.startswith("**") and part.endswith("**") and len(part) >= 4:
+            runs.append(_docx_run(part[2:-2], bold=True))
+        elif part.startswith("`") and part.endswith("`") and len(part) >= 2:
+            runs.append(_docx_run(part[1:-1], code=True))
+        elif part.startswith("*") and part.endswith("*") and len(part) >= 2:
+            runs.append(_docx_run(part[1:-1], italic=True))
+        else:
+            runs.append(_docx_run(part))
+    return "".join(runs) or _docx_run("")
+
+
+def _docx_paragraph(style: str, text: str) -> str:
+    ppr = f'<w:pPr><w:pStyle w:val="{style}"/></w:pPr>' if style and style != "Normal" else ""
+    return f"<w:p>{ppr}{_docx_runs(text)}</w:p>"
 
 
 def create_word_document(
@@ -99,7 +181,8 @@ def create_word_document(
     title: str = "",
     paragraphs: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Create a .docx. Paragraphs starting with '# ' / '## ' become headings."""
+    """Create a styled .docx. Use '# '/'## ' for headings and '- '/'* ' for bullets;
+    inline **bold**, *italic* and `code` are rendered."""
     items = list(paragraphs or [])
     if len(items) > MAX_PARAGRAPHS:
         raise ValueError(f"段落数量过多，最多 {MAX_PARAGRAPHS} 段")
@@ -107,19 +190,20 @@ def create_word_document(
 
     body_parts: list[str] = []
     if str(title).strip():
-        body_parts.append(_docx_paragraph(str(title).strip(), bold=True, size_half_points=36))
+        body_parts.append(_docx_paragraph("Title", str(title).strip()))
     for raw in items:
-        line = str(raw)
-        if len(line) > MAX_TEXT_CHARS:
-            line = line[:MAX_TEXT_CHARS]
+        line = str(raw)[:MAX_TEXT_CHARS]
+        stripped = line.strip()
         if line.startswith("## "):
-            body_parts.append(_docx_paragraph(line[3:].strip(), bold=True, size_half_points=26))
+            body_parts.append(_docx_paragraph("Heading2", line[3:].strip()))
         elif line.startswith("# "):
-            body_parts.append(_docx_paragraph(line[2:].strip(), bold=True, size_half_points=32))
+            body_parts.append(_docx_paragraph("Heading1", line[2:].strip()))
+        elif stripped.startswith("- ") or stripped.startswith("* "):
+            body_parts.append(_docx_paragraph("ListBullet", stripped[2:].strip()))
         else:
-            body_parts.append(_docx_paragraph(line))
+            body_parts.append(_docx_paragraph("Normal", line))
     if not body_parts:
-        body_parts.append(_docx_paragraph(""))
+        body_parts.append(_docx_paragraph("Normal", ""))
 
     document = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -136,6 +220,9 @@ def create_word_document(
             "[Content_Types].xml": _DOCX_CONTENT_TYPES,
             "_rels/.rels": _DOCX_ROOT_RELS,
             "word/document.xml": document,
+            "word/_rels/document.xml.rels": _DOCX_DOCUMENT_RELS,
+            "word/styles.xml": _DOCX_STYLES,
+            "word/numbering.xml": _DOCX_NUMBERING,
         },
     )
     return {
@@ -143,17 +230,13 @@ def create_word_document(
         "format": "docx",
         "paragraphs": len(body_parts),
         "bytes": target.stat().st_size,
-        "message": "Word 文档已生成（OOXML，无第三方依赖）。请用 Word/WPS 打开核对。",
+        "message": "Word 文档已生成（带标题/标题层级/项目符号样式，OOXML 无第三方依赖）。请用 Word/WPS 打开核对。",
     }
 
 
 # --------------------------------------------------------------------------- #
 # PowerPoint (.pptx)
 # --------------------------------------------------------------------------- #
-
-_A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
-_P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
-_R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
 _EMPTY_GROUP = (
     '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>'
@@ -244,36 +327,65 @@ _PPTX_SLIDE_RELS = (
 )
 
 
-def _pptx_text_shape(shape_id: int, name: str, x: int, y: int, cx: int, cy: int, paragraphs_xml: str) -> str:
+def _solid_rect(shape_id: int, color: str, x: int, y: int, cx: int, cy: int) -> str:
+    return (
+        "<p:sp>"
+        f'<p:nvSpPr><p:cNvPr id="{shape_id}" name="Accent{shape_id}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>'
+        f'<p:spPr><a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f'<a:solidFill><a:srgbClr val="{color}"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr>'
+        '<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>'
+        "</p:sp>"
+    )
+
+
+def _run_props(size: int, *, bold: bool, color: str) -> str:
+    return (
+        f'<a:rPr lang="zh-CN" altLang="en-US" sz="{size}" b="{1 if bold else 0}">'
+        f'<a:solidFill><a:srgbClr val="{color}"/></a:solidFill>'
+        f'<a:latin typeface="Calibri"/><a:ea typeface="{EA_FONT}"/></a:rPr>'
+    )
+
+
+def _title_paragraph(text: str, size: int, align: str) -> str:
+    return (
+        f'<a:p><a:pPr algn="{align}"/>'
+        f"<a:r>{_run_props(size, bold=True, color=ACCENT)}<a:t>{_xml_escape(text)}</a:t></a:r></a:p>"
+    )
+
+
+def _bullet_paragraph(text: str) -> str:
+    return (
+        '<a:p><a:pPr marL="342900" indent="-342900"><a:spcBef><a:spcPts val="600"/></a:spcBef>'
+        '<a:buFont typeface="Arial"/><a:buChar char="•"/></a:pPr>'
+        f"<a:r>{_run_props(1800, bold=False, color=TEXT_DARK)}<a:t>{_xml_escape(text)}</a:t></a:r></a:p>"
+    )
+
+
+def _text_shape(shape_id: int, name: str, x: int, y: int, cx: int, cy: int, paragraphs_xml: str) -> str:
     return (
         "<p:sp>"
         f'<p:nvSpPr><p:cNvPr id="{shape_id}" name="{name}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>'
         f'<p:spPr><a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>'
         '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>'
-        f'<p:txBody><a:bodyPr wrap="square"/><a:lstStyle/>{paragraphs_xml}</p:txBody>'
+        f'<p:txBody><a:bodyPr wrap="square"><a:normAutofit/></a:bodyPr><a:lstStyle/>{paragraphs_xml}</p:txBody>'
         "</p:sp>"
     )
 
 
-def _pptx_paragraph(text: str, *, size: int, bold: bool) -> str:
-    return (
-        "<a:p>"
-        f'<a:r><a:rPr lang="zh-CN" altLang="en-US" sz="{size}" b="{1 if bold else 0}"/>'
-        f"<a:t>{_xml_escape(text)}</a:t></a:r>"
-        "</a:p>"
-    )
-
-
-def _pptx_slide(title: str, bullets: list[str]) -> str:
-    shapes = []
-    shapes.append(
-        _pptx_text_shape(
-            2, "Title", 685800, 381000, 10820400, 1143000,
-            _pptx_paragraph(str(title), size=3200, bold=True),
-        )
-    )
-    body = "".join(_pptx_paragraph(str(b), size=1800, bold=False) for b in bullets) or _pptx_paragraph("", size=1800, bold=False)
-    shapes.append(_pptx_text_shape(3, "Content", 685800, 1676400, 10820400, 4525963, body))
+def _pptx_slide(title: str, bullets: list[str], is_cover: bool) -> str:
+    shapes: list[str] = []
+    if is_cover:
+        # Centered title slide with a centered accent underline.
+        shapes.append(_text_shape(2, "Title", 1219200, 2514600, 9753600, 1200000, _title_paragraph(title, 4400, "ctr")))
+        shapes.append(_solid_rect(3, ACCENT, 4495800, 3886200, 3200400, 50800))
+    else:
+        # Content slide: top accent band, title, accent underline, bullets.
+        shapes.append(_solid_rect(2, ACCENT, 0, 0, 12192000, 137160))
+        shapes.append(_text_shape(3, "Title", 685800, 411480, 10820400, 900000, _title_paragraph(title, 3200, "l")))
+        shapes.append(_solid_rect(4, ACCENT, 685800, 1303020, 3200400, 45720))
+        body = "".join(_bullet_paragraph(b) for b in bullets) or _bullet_paragraph("")
+        shapes.append(_text_shape(5, "Content", 685800, 1577340, 10820400, 4800600, body))
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         f'<p:sld xmlns:a="{_A_NS}" xmlns:r="{_R_NS}" xmlns:p="{_P_NS}">'
@@ -283,7 +395,8 @@ def _pptx_slide(title: str, bullets: list[str]) -> str:
 
 
 def create_powerpoint(root: Path, path: str, slides: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """Create a .pptx. `slides` is a list of {title, bullets:[...]} objects."""
+    """Create a styled .pptx. Each slide is {title, bullets:[...]}. The first
+    slide with no bullets is rendered as a centered cover slide."""
     deck = list(slides or [])
     if not deck:
         raise ValueError("至少需要一页幻灯片")
@@ -291,15 +404,16 @@ def create_powerpoint(root: Path, path: str, slides: list[dict[str, Any]] | None
         raise ValueError(f"幻灯片数量过多，最多 {MAX_SLIDES} 页")
     target = _resolve_output_path(root, path, ".pptx")
 
-    normalized: list[tuple[str, list[str]]] = []
-    for item in deck:
+    normalized: list[tuple[str, list[str], bool]] = []
+    for index, item in enumerate(deck):
         if isinstance(item, dict):
-            title = str(item.get("title") or "")
+            title = str(item.get("title") or "")[:MAX_TEXT_CHARS]
             bullets = [str(b)[:MAX_TEXT_CHARS] for b in (item.get("bullets") or []) if str(b).strip()]
         else:
-            title = str(item)
+            title = str(item)[:MAX_TEXT_CHARS]
             bullets = []
-        normalized.append((title[:MAX_TEXT_CHARS], bullets))
+        is_cover = index == 0 and not bullets
+        normalized.append((title, bullets, is_cover))
 
     count = len(normalized)
     slide_overrides = "".join(
@@ -361,8 +475,8 @@ def create_powerpoint(root: Path, path: str, slides: list[dict[str, Any]] | None
         "ppt/slideLayouts/slideLayout1.xml": _PPTX_SLIDE_LAYOUT,
         "ppt/slideLayouts/_rels/slideLayout1.xml.rels": _PPTX_SLIDE_LAYOUT_RELS,
     }
-    for i, (title, bullets) in enumerate(normalized):
-        parts[f"ppt/slides/slide{i + 1}.xml"] = _pptx_slide(title, bullets)
+    for i, (title, bullets, is_cover) in enumerate(normalized):
+        parts[f"ppt/slides/slide{i + 1}.xml"] = _pptx_slide(title, bullets, is_cover)
         parts[f"ppt/slides/_rels/slide{i + 1}.xml.rels"] = _PPTX_SLIDE_RELS
 
     _write_zip(target, parts)
@@ -371,7 +485,7 @@ def create_powerpoint(root: Path, path: str, slides: list[dict[str, Any]] | None
         "format": "pptx",
         "slides": count,
         "bytes": target.stat().st_size,
-        "message": "PPT 已生成（OOXML，无第三方依赖）。请用 PowerPoint/WPS 打开核对。",
+        "message": "PPT 已生成（含封面页、标题强调条与项目符号样式，OOXML 无第三方依赖）。请用 PowerPoint/WPS 打开核对。",
     }
 
 
@@ -386,7 +500,39 @@ _XLSX_ROOT_RELS = (
     '</Relationships>'
 )
 
-_SHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+# Style indices used below: 0 default, 1 header (white bold on blue, bordered,
+# centered), 2 data (bordered), 3 data banded (light fill, bordered).
+_XLSX_STYLES = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    f'<styleSheet xmlns="{_SHEET_NS}">'
+    '<fonts count="3">'
+    '<font><sz val="11"/><name val="Calibri"/></font>'
+    f'<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>'
+    f'<font><sz val="11"/><color rgb="FF{TEXT_DARK}"/><name val="Calibri"/></font>'
+    '</fonts>'
+    '<fills count="4">'
+    '<fill><patternFill patternType="none"/></fill>'
+    '<fill><patternFill patternType="gray125"/></fill>'
+    f'<fill><patternFill patternType="solid"><fgColor rgb="FF{ACCENT}"/><bgColor indexed="64"/></patternFill></fill>'
+    f'<fill><patternFill patternType="solid"><fgColor rgb="FF{BAND_LIGHT}"/><bgColor indexed="64"/></patternFill></fill>'
+    '</fills>'
+    '<borders count="2">'
+    '<border><left/><right/><top/><bottom/><diagonal/></border>'
+    f'<border><left style="thin"><color rgb="FF{BORDER_GREY}"/></left>'
+    f'<right style="thin"><color rgb="FF{BORDER_GREY}"/></right>'
+    f'<top style="thin"><color rgb="FF{BORDER_GREY}"/></top>'
+    f'<bottom style="thin"><color rgb="FF{BORDER_GREY}"/></bottom><diagonal/></border>'
+    '</borders>'
+    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+    '<cellXfs count="4">'
+    '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+    '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
+    '<xf numFmtId="0" fontId="2" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>'
+    '<xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>'
+    '</cellXfs>'
+    '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
+    '</styleSheet>'
+)
 
 
 def _col_letter(index: int) -> str:
@@ -398,35 +544,64 @@ def _col_letter(index: int) -> str:
     return letters
 
 
-def _xlsx_cell(ref: str, value: Any) -> str:
+def _xlsx_cell(ref: str, value: Any, style: int) -> str:
+    style_attr = f' s="{style}"' if style else ""
     if isinstance(value, bool):
         value = "TRUE" if value else "FALSE"
     if isinstance(value, (int, float)):
-        return f'<c r="{ref}"><v>{value}</v></c>'
+        return f'<c r="{ref}"{style_attr}><v>{value}</v></c>'
     text = str(value)
     if text and _NUMERIC_RE.fullmatch(text):
-        return f'<c r="{ref}"><v>{text}</v></c>'
-    return f'<c r="{ref}" t="inlineStr"><is><t xml:space="preserve">{_xml_escape(text)}</t></is></c>'
+        return f'<c r="{ref}"{style_attr}><v>{text}</v></c>'
+    return f'<c r="{ref}"{style_attr} t="inlineStr"><is><t xml:space="preserve">{_xml_escape(text)}</t></is></c>'
 
 
 def _xlsx_sheet(rows: list[list[Any]]) -> str:
+    capped = [list(row)[:MAX_COLS] for row in rows[:MAX_ROWS]]
+    max_cols = max((len(row) for row in capped), default=1)
+    # Column widths from the longest cell text in each column.
+    widths: list[int] = [10] * max_cols
+    for row in capped:
+        for c_index, value in enumerate(row):
+            length = len(str(value)) + 2
+            widths[c_index] = max(widths[c_index], min(length, 60))
+    cols = "".join(
+        f'<col min="{i + 1}" max="{i + 1}" width="{w}" customWidth="1"/>'
+        for i, w in enumerate(widths)
+    )
     row_xml: list[str] = []
-    for r_index, row in enumerate(rows[:MAX_ROWS], start=1):
+    for r_index, row in enumerate(capped, start=1):
+        if r_index == 1:
+            style = 1  # header
+        else:
+            style = 3 if r_index % 2 == 1 else 2  # banded data rows
         cells = "".join(
-            _xlsx_cell(f"{_col_letter(c_index)}{r_index}", value)
-            for c_index, value in enumerate(list(row)[:MAX_COLS])
+            _xlsx_cell(f"{_col_letter(c_index)}{r_index}", value, style)
+            for c_index, value in enumerate(row)
         )
         row_xml.append(f'<row r="{r_index}">{cells}</row>')
+    pane = (
+        '<sheetViews><sheetView workbookViewId="0">'
+        '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>'
+        '</sheetView></sheetViews>'
+    )
+    auto_filter = ""
+    if capped:
+        auto_filter = f'<autoFilter ref="A1:{_col_letter(max_cols - 1)}{len(capped)}"/>'
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        f'<worksheet xmlns="{_SHEET_NS}"><sheetData>{"".join(row_xml)}</sheetData></worksheet>'
+        f'<worksheet xmlns="{_SHEET_NS}" xmlns:r="{_R_NS}">'
+        f'{pane}<sheetFormatPr defaultRowHeight="16.5"/><cols>{cols}</cols>'
+        f'<sheetData>{"".join(row_xml)}</sheetData>{auto_filter}</worksheet>'
     )
 
 
 def create_excel(root: Path, path: str, sheets: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """Create a .xlsx workbook. `sheets` is a list of {name, rows:[[cell,...],...]}.
+    """Create a styled .xlsx workbook. `sheets` is a list of {name, rows:[[cell,...],...]}.
 
-    Cells may be strings or numbers; numeric-looking strings become numbers."""
+    The first row is styled as a header (white bold on blue), data rows are
+    bordered with banded shading, columns auto-size, the header is frozen, and an
+    autofilter is applied. Numeric-looking strings become real numbers."""
     books = list(sheets or [])
     if not books:
         raise ValueError("至少需要一个工作表")
@@ -438,12 +613,11 @@ def create_excel(root: Path, path: str, sheets: list[dict[str, Any]] | None = No
     used_names: set[str] = set()
     for index, book in enumerate(books):
         if isinstance(book, dict):
-            name = str(book.get("name") or f"Sheet{index + 1}").strip()[:31] or f"Sheet{index + 1}"
+            name = str(book.get("name") or f"Sheet{index + 1}")
             rows = book.get("rows") or []
         else:
             name = f"Sheet{index + 1}"
             rows = book
-        # Excel forbids duplicate sheet names and a few characters.
         name = re.sub(r"[\\/?*\[\]:]", " ", name).strip()[:31] or f"Sheet{index + 1}"
         base = name
         suffix = 2
@@ -464,6 +638,7 @@ def create_excel(root: Path, path: str, sheets: list[dict[str, Any]] | None = No
         '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
         '<Default Extension="xml" ContentType="application/xml"/>'
         '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
         f"{sheet_overrides}"
         "</Types>"
     )
@@ -476,16 +651,20 @@ def create_excel(root: Path, path: str, sheets: list[dict[str, Any]] | None = No
         f'<workbook xmlns="{_SHEET_NS}" xmlns:r="{_R_NS}">'
         f'<sheets>{sheet_entries}</sheets></workbook>'
     )
+    sheet_count = len(normalized)
     workbook_rels_inner = "".join(
         f'<Relationship Id="rId{i + 1}" '
         'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
         f'Target="worksheets/sheet{i + 1}.xml"/>'
-        for i in range(len(normalized))
+        for i in range(sheet_count)
     )
     workbook_rels = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-        f"{workbook_rels_inner}</Relationships>"
+        f"{workbook_rels_inner}"
+        f'<Relationship Id="rId{sheet_count + 1}" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+        "</Relationships>"
     )
 
     parts: dict[str, str] = {
@@ -493,6 +672,7 @@ def create_excel(root: Path, path: str, sheets: list[dict[str, Any]] | None = No
         "_rels/.rels": _XLSX_ROOT_RELS,
         "xl/workbook.xml": workbook,
         "xl/_rels/workbook.xml.rels": workbook_rels,
+        "xl/styles.xml": _XLSX_STYLES,
     }
     total_rows = 0
     for i, (_name, rows) in enumerate(normalized):
@@ -506,5 +686,5 @@ def create_excel(root: Path, path: str, sheets: list[dict[str, Any]] | None = No
         "sheets": len(normalized),
         "rows": total_rows,
         "bytes": target.stat().st_size,
-        "message": "Excel 已生成（OOXML，无第三方依赖）。请用 Excel/WPS 打开核对。",
+        "message": "Excel 已生成（表头高亮、隔行底纹、边框、冻结首行与筛选，OOXML 无第三方依赖）。请用 Excel/WPS 打开核对。",
     }
