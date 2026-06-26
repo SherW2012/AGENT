@@ -133,7 +133,7 @@ Web 右侧 Skill 面板会显示当前已发现的 skill。点击虚线加号可
 ## 快速开始
 
 ```powershell
-cd D:\wsr\code\project\agent
+cd C:\path\to\agent
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e .
@@ -146,7 +146,7 @@ Copy-Item .env.example .env
 浏览器。也可以手动运行：
 
 ```powershell
-bnct-agent-web --root D:\wsr\code\project\agent --open-browser
+bnct-agent-web --root C:\path\to\agent --open-browser
 ```
 
 Web 工作台可以预览文件、配置本次会话的 API Key、发送任务，并在写文件或运行测试
@@ -215,7 +215,7 @@ python -m unittest discover -s tests -v
 也可执行一次性任务：
 
 ```powershell
-bnct-agent ask --root D:\path\to\tps-repo "定位剂量计算模块并总结测试覆盖"
+bnct-agent ask --root C:\path\to\tps-repo "定位剂量计算模块并总结测试覆盖"
 ```
 
 ## 计划快照接口
