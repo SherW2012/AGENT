@@ -39,7 +39,15 @@
 
         <div class="sidebar-section-title">
           <span>会话</span>
-          <span class="count-badge" id="session-count">0</span>
+          <div class="session-title-actions">
+            <button class="session-manage-button" id="session-manage-button" type="button" title="筛选 / 多选删除">管理</button>
+            <span class="count-badge" id="session-count">0</span>
+          </div>
+        </div>
+        <div class="session-select-bar hidden" id="session-select-bar">
+          <label class="select-all-label"><input type="checkbox" id="session-select-all" /> 全选</label>
+          <button class="session-delete-selected" id="session-delete-selected" type="button" disabled>删除</button>
+          <button class="session-manage-done" id="session-manage-done" type="button">完成</button>
         </div>
         <div class="session-list" id="session-list" aria-label="会话列表"></div>
 
@@ -139,16 +147,15 @@
           <div class="workspace-heading">
             <div>
               <span class="eyebrow">SKILLS</span>
-              <h2>Skill</h2>
+              <h2>常用 Skill</h2>
               <p class="panel-help">点击一个 Skill，会把使用说明填入输入框；补充目标后再发送。</p>
             </div>
-            <span class="count-badge" id="skill-count">0</span>
+            <div class="skill-heading-actions">
+              <button class="skill-all-button" id="open-skills-modal" type="button">全部</button>
+              <span class="count-badge" id="skill-count">0</span>
+            </div>
           </div>
-          <div class="skill-list" id="skill-list" aria-label="Skill 列表"></div>
-          <button class="skill-import-card" id="import-skill-button" type="button">
-            <span class="plus-mark">+</span>
-            <span><strong>导入新的 skill</strong><small>选择包含 SKILL.md 的文件夹</small></span>
-          </button>
+          <div class="skill-list" id="skill-list" aria-label="常用 Skill 列表"></div>
         </section>
       </aside>
     </div>
@@ -166,6 +173,28 @@
       </div>
       <div class="file-preview" id="preview-content"></div>
     </aside>
+
+    <div class="modal-backdrop hidden" id="skills-modal">
+      <div class="modal-card skills-modal-card" role="dialog" aria-modal="true" aria-labelledby="skills-modal-title">
+        <div class="modal-header">
+          <div>
+            <span class="eyebrow">SKILLS</span>
+            <h2 id="skills-modal-title">全部 Skill</h2>
+          </div>
+          <button class="icon-button close-skills-modal" type="button" aria-label="关闭">
+            <svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
+          </button>
+        </div>
+        <p class="skills-modal-help">点亮 ★ 设为常用（最多 7 个），常用 Skill 显示在右下角面板；× 删除本地导入的 skill。</p>
+        <div class="skills-grid" id="skills-grid" aria-label="全部 Skill"></div>
+        <div class="skills-modal-footer">
+          <button class="skill-import-card" id="import-skill-button" type="button">
+            <span class="plus-mark">+</span>
+            <span><strong>导入新的 skill</strong><small>选择包含 SKILL.md 的文件夹</small></span>
+          </button>
+        </div>
+      </div>
+    </div>
 
     <div class="modal-backdrop hidden" id="settings-modal">
       <div class="modal-card settings-card" role="dialog" aria-modal="true" aria-labelledby="settings-title">

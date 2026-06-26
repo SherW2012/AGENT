@@ -205,6 +205,24 @@ class WebServerTests(unittest.TestCase):
         deleted = self._post_json("/api/session/delete", {"id": session_id})
         self.assertNotEqual(deleted["config"]["currentSessionId"], session_id)
 
+    def test_skill_favorites_and_office_skills(self):
+        config = self._json("/api/config")
+        names = {item["name"] for item in config["skills"]}
+        self.assertIn("create-word", names)
+        self.assertIn("create-ppt", names)
+        result = self._post_json("/api/skill/favorites", {"names": ["create-word", "debug"]})
+        self.assertEqual(set(result["favorites"]), {"create-word", "debug"})
+        favorites = {item["name"] for item in result["config"]["skills"] if item.get("favorite")}
+        self.assertEqual(favorites, {"create-word", "debug"})
+
+    def test_batch_session_delete(self):
+        first = self._post_json("/api/sessions", {})["session"]["id"]
+        second = self._post_json("/api/sessions", {})["session"]["id"]
+        result = self._post_json("/api/session/delete-batch", {"ids": [first, second]})
+        remaining = {item["id"] for item in result["sessions"]}
+        self.assertNotIn(first, remaining)
+        self.assertNotIn(second, remaining)
+
     def test_attachment_prompt_builder_is_bounded_and_labeled(self):
         prompt_attachments, stored = normalize_attachments(
             [{"name": "notes.md", "type": "text/markdown", "size": 12, "content": "**hello**"}]

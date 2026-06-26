@@ -14,6 +14,7 @@ from .project_tools import (
     search_project_text,
     write_project_text,
 )
+from .office_tools import create_powerpoint, create_word_document
 from .safety import PolicyDenied, Risk, SafetyPolicy
 from .skills import SkillRegistry
 from .tps_tools import summarize_plan_snapshot, validate_plan_snapshot
@@ -188,6 +189,49 @@ class ToolRegistry:
                 {**object_schema, "properties": {"path": {"type": "string"}}, "required": ["path"]},
                 Risk.READ,
                 summarize_plan_snapshot,
+            ),
+            Tool(
+                "create_word_document",
+                "Create a .docx Word document in the workspace from a title and a list of paragraph strings. "
+                "Prefix a paragraph with '# ' or '## ' to make it a heading. Output is standards-based OOXML; "
+                "no patient identifiers or secrets may be written.",
+                {
+                    **object_schema,
+                    "properties": {
+                        "path": {"type": "string"},
+                        "title": {"type": "string"},
+                        "paragraphs": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["path", "title", "paragraphs"],
+                },
+                Risk.WRITE,
+                lambda root, path, title, paragraphs: create_word_document(root, path, title, paragraphs),
+            ),
+            Tool(
+                "create_powerpoint",
+                "Create a .pptx PowerPoint deck in the workspace. Each slide is an object with a title and a list "
+                "of bullet strings. Output is standards-based OOXML; no patient identifiers or secrets may be written.",
+                {
+                    **object_schema,
+                    "properties": {
+                        "path": {"type": "string"},
+                        "slides": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "title": {"type": "string"},
+                                    "bullets": {"type": "array", "items": {"type": "string"}},
+                                },
+                                "required": ["title", "bullets"],
+                            },
+                        },
+                    },
+                    "required": ["path", "slides"],
+                },
+                Risk.WRITE,
+                lambda root, path, slides: create_powerpoint(root, path, slides),
             ),
         ]
         if self.web_search_mode != "off":

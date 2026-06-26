@@ -448,6 +448,25 @@ class ApplicationState:
         self.add_event({"type": "session_deleted", "session": session_id})
         return {"config": self.config(), **self.list_sessions()}
 
+    def delete_sessions(self, session_ids: list[str]) -> dict[str, Any]:
+        if self._chat_lock.locked():
+            raise RuntimeError("当前任务仍在执行")
+        ids = [str(item) for item in (session_ids or []) if str(item)]
+        if not ids:
+            raise ValueError("没有选择要删除的会话")
+        current = self.current_session_id
+        for session_id in ids:
+            current = self.sessions.delete(session_id)
+        self.current_session_id = current
+        self._rebuild_runtime(clear_events=True)
+        self.add_event({"type": "sessions_deleted", "count": len(ids)})
+        return {"config": self.config(), **self.list_sessions()}
+
+    def set_skill_favorites(self, names: list[str]) -> dict[str, Any]:
+        favorites = self.skill_registry.set_favorites(names)
+        self.add_event({"type": "skill_favorites_updated", "count": len(favorites)})
+        return {"favorites": favorites, "config": self.config()}
+
     def chat(self, task: str, attachments: list[dict[str, Any]] | None = None, session_id: str | None = None) -> dict[str, Any]:
         if not task.strip():
             raise ValueError("任务不能为空")
@@ -780,6 +799,10 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
                 )
             elif parsed.path == "/api/session/delete":
                 self._send_json(self.server.state.delete_session(str(payload.get("id") or "")))
+            elif parsed.path == "/api/session/delete-batch":
+                self._send_json(self.server.state.delete_sessions(payload.get("ids") or []))
+            elif parsed.path == "/api/skill/favorites":
+                self._send_json(self.server.state.set_skill_favorites(payload.get("names") or []))
             elif parsed.path == "/api/approval":
                 self.server.state.resolve_approval(
                     str(payload.get("id") or ""),

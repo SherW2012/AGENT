@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 import shutil
 import sys
@@ -9,8 +10,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+MAX_FAVORITE_SKILLS = 7
+
 
 SKILL_ROOTS = ("skills", ".agent/skills", ".claude/skills")
+# Skills shipped with the app live next to the package (repo_root/skills) and are
+# discovered regardless of which working directory is open, so the skill set does
+# not change when the workspace changes. See requirement: skills and workspace are
+# independent systems.
+APP_SKILLS_DIR = (Path(__file__).resolve().parents[2] / "skills").resolve()
 MAX_SKILL_TEXT_CHARS = 24_000
 SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
 IMPORT_IGNORES = shutil.ignore_patterns(".git", ".venv", "__pycache__", "*.pyc", ".bnct_agent")
@@ -103,9 +111,16 @@ class SkillRegistry:
         self._skills = self._discover()
 
     def _skill_roots(self) -> list[Path]:
-        roots = [(self.root / relative).resolve() for relative in SKILL_ROOTS]
+        roots: list[Path] = []
+        # Bundled defaults: always available, never tied to the workspace.
+        if APP_SKILLS_DIR.is_dir():
+            roots.append(APP_SKILLS_DIR)
         if self.data_dir is not None:
+            # Production: user-level skills only -> fully workspace-independent.
             roots.append((self.data_dir / "skills").resolve())
+        else:
+            # Legacy / test mode (no data dir): fall back to project-local skills.
+            roots.extend((self.root / relative).resolve() for relative in SKILL_ROOTS)
         return roots
 
     def _import_base(self) -> Path:
@@ -162,6 +177,7 @@ class SkillRegistry:
         return skill
 
     def public_catalog(self, *, include_background: bool = False) -> list[dict[str, Any]]:
+        favorites = set(self.favorite_names())
         result = []
         for skill in self.list():
             if skill.visibility == "background" and not include_background:
@@ -175,6 +191,7 @@ class SkillRegistry:
                     "description": skill.description,
                     "path": self._display_path(skill.path),
                     "removable": self.is_removable(skill),
+                    "favorite": skill.name in favorites,
                     "trusted": skill.trusted,
                     "visibility": skill.visibility,
                     "hasProcessor": bool(skill.processor),
@@ -232,8 +249,60 @@ class SkillRegistry:
                 "不能从界面删除；如需移除请在代码仓库中处理。"
             )
         shutil.rmtree(skill.path, ignore_errors=True)
+        # Drop it from the favorites list too, if present.
+        prefs = self._load_prefs()
+        favorites = [item for item in (prefs.get("favorites") or []) if item != name]
+        self._write_prefs({**prefs, "favorites": favorites})
         self.refresh()
         return {"name": name}
+
+    def _prefs_path(self) -> Path | None:
+        if self.data_dir is None:
+            return None
+        return (self.data_dir / "skill-prefs.json").resolve()
+
+    def _load_prefs(self) -> dict[str, Any]:
+        path = self._prefs_path()
+        if path is None:
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _write_prefs(self, prefs: dict[str, Any]) -> None:
+        path = self._prefs_path()
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(prefs, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _panel_names(self) -> set[str]:
+        return {skill.name for skill in self.list() if skill.visibility == "panel"}
+
+    def favorite_names(self) -> list[str]:
+        """User's pinned (常用) skills, capped and filtered to existing panel skills."""
+        favorites = self._load_prefs().get("favorites") or []
+        panel = self._panel_names()
+        ordered = [str(name) for name in favorites if str(name) in panel]
+        # De-duplicate while preserving order.
+        return list(dict.fromkeys(ordered))[:MAX_FAVORITE_SKILLS]
+
+    def set_favorites(self, names: list[str]) -> list[str]:
+        if self._prefs_path() is None:
+            raise RuntimeError("当前没有可用的用户数据目录，无法保存常用 skill")
+        panel = self._panel_names()
+        cleaned: list[str] = []
+        for name in names or []:
+            name = str(name)
+            if name in panel and name not in cleaned:
+                cleaned.append(name)
+        if len(cleaned) > MAX_FAVORITE_SKILLS:
+            raise ValueError(f"常用 skill 最多设置 {MAX_FAVORITE_SKILLS} 个")
+        prefs = self._load_prefs()
+        self._write_prefs({**prefs, "favorites": cleaned})
+        return cleaned
 
     def catalog_context(self) -> str:
         catalog = self.public_catalog(include_background=True)

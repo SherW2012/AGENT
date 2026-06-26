@@ -26,6 +26,8 @@ const state = {
   stopped: false,
   lastSubmission: null,
   dragDepth: 0,
+  selectMode: false,
+  selectedSessions: new Set(),
 };
 
 const elements = {
@@ -81,6 +83,14 @@ const elements = {
   sidebarToggle: document.querySelector("#sidebar-toggle"),
   skillCount: document.querySelector("#skill-count"),
   skillList: document.querySelector("#skill-list"),
+  openSkillsModal: document.querySelector("#open-skills-modal"),
+  skillsModal: document.querySelector("#skills-modal"),
+  skillsGrid: document.querySelector("#skills-grid"),
+  sessionManage: document.querySelector("#session-manage-button"),
+  sessionSelectBar: document.querySelector("#session-select-bar"),
+  sessionSelectAll: document.querySelector("#session-select-all"),
+  sessionDeleteSelected: document.querySelector("#session-delete-selected"),
+  sessionManageDone: document.querySelector("#session-manage-done"),
   toastStack: document.querySelector("#toast-stack"),
   webSearchInputs: document.querySelectorAll('input[name="web-search-mode"]'),
   webSearchNetworkInputs: document.querySelectorAll('input[name="web-search-network"]'),
@@ -234,6 +244,7 @@ function updateConfig(config) {
   elements.baseUrl.value = config.baseUrl || "";
   elements.root.value = config.root;
   renderSkills();
+  renderSkillsGrid();
   setBusy(Boolean(config.busy));
 }
 
@@ -661,8 +672,10 @@ function appendMessage(role, text, options = {}) {
   renderMarkdown(content, text);
   body.append(meta, content);
   renderMessageAttachments(body, options.attachments || []);
-  if (options.withActions) addMessageActions(article, text, options.retryTask);
   article.append(avatar, body);
+  // Must run after the body is attached to the article so the action row can
+  // find ".message-body"; otherwise re-rendered history loses copy/retry.
+  if (options.withActions) addMessageActions(article, text, options.retryTask);
   elements.messageList.append(article);
   if (options.scroll !== false) {
     elements.conversation.scrollTo({ top: elements.conversation.scrollHeight, behavior: "smooth" });
@@ -710,6 +723,8 @@ function toolDisplayName(name) {
     run_unit_tests: "运行测试",
     validate_plan_snapshot: "校验计划快照",
     summarize_plan_snapshot: "摘要计划快照",
+    create_word_document: "生成 Word 文档",
+    create_powerpoint: "生成 PPT",
     read_agent_memory: "读取记忆",
     append_agent_memory: "写入记忆",
   };
@@ -812,9 +827,28 @@ function resizePrompt() {
   elements.prompt.style.height = `${Math.min(elements.prompt.scrollHeight, 190)}px`;
 }
 
+function updateSessionSelectBar() {
+  elements.sessionSelectBar.classList.toggle("hidden", !state.selectMode);
+  elements.sessionManage.classList.toggle("active", state.selectMode);
+  elements.sessionManage.textContent = state.selectMode ? "取消" : "管理";
+  const total = state.sessions.length;
+  const selected = state.sessions.filter((session) => state.selectedSessions.has(session.id)).length;
+  elements.sessionDeleteSelected.disabled = selected === 0;
+  elements.sessionDeleteSelected.textContent = selected ? `删除 (${selected})` : "删除";
+  elements.sessionSelectAll.checked = total > 0 && selected === total;
+  elements.sessionSelectAll.indeterminate = selected > 0 && selected < total;
+}
+
 function renderSessionList() {
   elements.sessionList.replaceChildren();
+  elements.sessionList.classList.toggle("select-mode", state.selectMode);
   elements.sessionCount.textContent = String(state.sessions.length);
+  // Drop selections that no longer exist (e.g. after a search filter).
+  const ids = new Set(state.sessions.map((session) => session.id));
+  state.selectedSessions.forEach((id) => {
+    if (!ids.has(id)) state.selectedSessions.delete(id);
+  });
+  updateSessionSelectBar();
   if (!state.sessions.length) {
     const empty = document.createElement("div");
     empty.className = "session-empty";
@@ -824,45 +858,99 @@ function renderSessionList() {
   }
 
   state.sessions.forEach((session) => {
-    const item = document.createElement("button");
-    item.className = `session-item ${session.id === state.currentSessionId ? "active" : ""}`;
-    item.type = "button";
+    const item = document.createElement(state.selectMode ? "div" : "button");
+    const checked = state.selectMode && state.selectedSessions.has(session.id);
+    const active = !state.selectMode && session.id === state.currentSessionId;
+    item.className = `session-item ${active ? "active" : ""} ${checked ? "checked" : ""}`;
+    if (!state.selectMode) item.type = "button";
     item.title = session.title;
+
+    if (state.selectMode) {
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.className = "session-check";
+      box.checked = checked;
+      box.addEventListener("click", (event) => {
+        event.stopPropagation();
+        toggleSessionSelected(session.id, box.checked);
+      });
+      item.append(box);
+    }
 
     const main = document.createElement("span");
     main.className = "session-main";
     const title = document.createElement("strong");
-    title.textContent = session.title || "未命名会话";
+    title.textContent = `${session.favorite ? "★ " : ""}${session.title || "未命名会话"}`;
     const preview = document.createElement("small");
     preview.textContent = session.preview || session.displayTime || "";
     main.append(title, preview);
+    item.append(main);
 
-    const actions = document.createElement("span");
-    actions.className = "session-item-actions";
-    const favorite = document.createElement("button");
-    favorite.className = `session-mini-button ${session.favorite ? "favorited" : ""}`;
-    favorite.type = "button";
-    favorite.title = session.favorite ? "取消置顶" : "收藏置顶";
-    favorite.textContent = session.favorite ? "★" : "☆";
-    favorite.addEventListener("click", (event) => {
-      event.stopPropagation();
-      setSessionFavorite(session.id, !session.favorite);
-    });
-    const remove = document.createElement("button");
-    remove.className = "session-mini-button";
-    remove.type = "button";
-    remove.title = "删除会话";
-    remove.textContent = "×";
-    remove.addEventListener("click", (event) => {
-      event.stopPropagation();
-      deleteSession(session.id, session.title);
-    });
-    actions.append(favorite, remove);
-
-    item.append(main, actions);
-    item.addEventListener("click", () => selectSession(session.id));
+    if (!state.selectMode) {
+      const actions = document.createElement("span");
+      actions.className = "session-item-actions";
+      const favorite = document.createElement("button");
+      favorite.className = `session-mini-button ${session.favorite ? "favorited" : ""}`;
+      favorite.type = "button";
+      favorite.title = session.favorite ? "取消置顶" : "收藏置顶";
+      favorite.textContent = session.favorite ? "★" : "☆";
+      favorite.addEventListener("click", (event) => {
+        event.stopPropagation();
+        setSessionFavorite(session.id, !session.favorite);
+      });
+      const remove = document.createElement("button");
+      remove.className = "session-mini-button";
+      remove.type = "button";
+      remove.title = "删除会话";
+      remove.textContent = "×";
+      remove.addEventListener("click", (event) => {
+        event.stopPropagation();
+        deleteSession(session.id, session.title);
+      });
+      actions.append(favorite, remove);
+      item.append(actions);
+      item.addEventListener("click", () => selectSession(session.id));
+    } else {
+      item.addEventListener("click", () => toggleSessionSelected(session.id, !state.selectedSessions.has(session.id)));
+    }
     elements.sessionList.append(item);
   });
+}
+
+function setSessionSelectMode(on) {
+  state.selectMode = Boolean(on);
+  state.selectedSessions.clear();
+  renderSessionList();
+}
+
+function toggleSessionSelected(id, on) {
+  if (on) state.selectedSessions.add(id);
+  else state.selectedSessions.delete(id);
+  renderSessionList();
+}
+
+function toggleSelectAllSessions(on) {
+  state.selectedSessions = new Set(on ? state.sessions.map((session) => session.id) : []);
+  renderSessionList();
+}
+
+async function deleteSelectedSessions() {
+  const ids = state.sessions.filter((session) => state.selectedSessions.has(session.id)).map((session) => session.id);
+  if (!ids.length) return;
+  if (!window.confirm(`删除选中的 ${ids.length} 个会话？`)) return;
+  try {
+    const result = await api("/api/session/delete-batch", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    });
+    updateConfig(result.config);
+    state.sessions = result.sessions || [];
+    setSessionSelectMode(false);
+    await loadCurrentSession(result.currentSessionId);
+    showToast(`已删除 ${ids.length} 个会话`);
+  } catch (error) {
+    showToast(error.message, "error");
+  }
 }
 
 async function loadSessions(query = elements.sessionSearch.value) {
@@ -1041,55 +1129,145 @@ function skillSubtitle(skill) {
   return firstSentence.length > 40 ? `${firstSentence.slice(0, 40)}…` : firstSentence;
 }
 
+function buildSkillRow(skill, index) {
+  const row = document.createElement("div");
+  row.className = "skill-row";
+  const button = document.createElement("button");
+  button.className = "skill-action";
+  button.type = "button";
+  button.title = `${skill.displayName || skill.name}\n${skill.description || ""}`;
+  const icon = document.createElement("span");
+  icon.className = `skill-icon ${skillTone(skill, index)}`;
+  icon.textContent = skillInitial(skill);
+  const copy = document.createElement("span");
+  copy.className = "skill-copy";
+  const title = document.createElement("strong");
+  title.textContent = skill.displayName || skill.name;
+  const subtitle = document.createElement("small");
+  subtitle.textContent = skillSubtitle(skill);
+  copy.append(title, subtitle);
+  button.append(icon, copy);
+  button.addEventListener("click", () => stageSkillPrompt(skill));
+  row.append(button);
+  if (skill.removable) {
+    const remove = document.createElement("button");
+    remove.className = "skill-delete";
+    remove.type = "button";
+    remove.title = "删除该 skill";
+    remove.textContent = "×";
+    remove.addEventListener("click", (event) => {
+      event.stopPropagation();
+      deleteSkillUi(skill.name);
+    });
+    row.append(remove);
+  }
+  return row;
+}
+
 function renderSkills() {
   elements.skillList.replaceChildren();
-  const skills = state.skills || [];
-  elements.skillCount.textContent = String(skills.length);
-  if (!skills.length) {
+  const all = state.skills || [];
+  elements.skillCount.textContent = String(all.length);
+  const favorites = all.filter((skill) => skill.favorite);
+  if (!favorites.length) {
+    const hint = document.createElement("button");
+    hint.type = "button";
+    hint.className = "skill-empty-hint";
+    hint.textContent = all.length ? "未设置常用 Skill，点这里从“全部”里选择" : "暂无 skill";
+    if (all.length) hint.addEventListener("click", openSkillsModal);
+    elements.skillList.append(hint);
+    return;
+  }
+  favorites.forEach((skill, index) => elements.skillList.append(buildSkillRow(skill, index)));
+}
+
+function renderSkillsGrid() {
+  if (!elements.skillsGrid) return;
+  elements.skillsGrid.replaceChildren();
+  const all = state.skills || [];
+  if (!all.length) {
     const empty = document.createElement("div");
     empty.className = "session-empty";
     empty.textContent = "暂无 skill";
-    elements.skillList.append(empty);
+    elements.skillsGrid.append(empty);
     return;
   }
-  skills.forEach((skill, index) => {
-    const row = document.createElement("div");
-    row.className = "skill-row";
-
-    const button = document.createElement("button");
-    button.className = "skill-action";
-    button.type = "button";
-    button.title = `${skill.displayName || skill.name}\n${skill.description || ""}`;
+  all.forEach((skill, index) => {
+    const wrap = document.createElement("div");
+    wrap.className = `skill-tile-wrap ${skill.favorite ? "is-fav" : ""}`;
+    const tile = document.createElement("button");
+    tile.type = "button";
+    tile.className = "skill-tile";
+    tile.title = `${skill.displayName || skill.name}\n${skill.description || ""}`;
     const icon = document.createElement("span");
-    icon.className = `skill-icon ${skillTone(skill, index)}`;
+    icon.className = `skill-tile-icon ${skillTone(skill, index)}`;
     icon.textContent = skillInitial(skill);
-    const copy = document.createElement("span");
-    copy.className = "skill-copy";
-    const title = document.createElement("strong");
-    title.textContent = skill.displayName || skill.name;
-    const subtitle = document.createElement("small");
-    subtitle.textContent = skillSubtitle(skill);
-    copy.append(title, subtitle);
-    button.append(icon, copy);
-    button.addEventListener("click", () => {
+    const name = document.createElement("span");
+    name.className = "skill-tile-name";
+    name.textContent = skill.displayName || skill.name;
+    tile.append(icon, name);
+    tile.addEventListener("click", () => {
       stageSkillPrompt(skill);
+      closeSkillsModal();
     });
-    row.append(button);
+
+    const star = document.createElement("button");
+    star.type = "button";
+    star.className = `skill-star ${skill.favorite ? "on" : ""}`;
+    star.title = skill.favorite ? "取消常用" : "设为常用";
+    star.textContent = skill.favorite ? "★" : "☆";
+    star.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleFavoriteSkill(skill.name);
+    });
+    wrap.append(tile, star);
 
     if (skill.removable) {
-      const remove = document.createElement("button");
-      remove.className = "skill-delete";
-      remove.type = "button";
-      remove.title = "删除该 skill";
-      remove.textContent = "×";
-      remove.addEventListener("click", (event) => {
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "skill-tile-del";
+      del.title = "删除该 skill";
+      del.textContent = "×";
+      del.addEventListener("click", (event) => {
         event.stopPropagation();
         deleteSkillUi(skill.name);
       });
-      row.append(remove);
+      wrap.append(del);
     }
-    elements.skillList.append(row);
+    elements.skillsGrid.append(wrap);
   });
+}
+
+async function toggleFavoriteSkill(name) {
+  const current = (state.skills || []).filter((skill) => skill.favorite).map((skill) => skill.name);
+  let next;
+  if (current.includes(name)) {
+    next = current.filter((item) => item !== name);
+  } else {
+    if (current.length >= 7) {
+      showToast("常用 Skill 最多 7 个，请先取消一个", "error");
+      return;
+    }
+    next = [...current, name];
+  }
+  try {
+    const result = await api("/api/skill/favorites", {
+      method: "POST",
+      body: JSON.stringify({ names: next }),
+    });
+    updateConfig(result.config);
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+function openSkillsModal() {
+  renderSkillsGrid();
+  elements.skillsModal.classList.remove("hidden");
+}
+
+function closeSkillsModal() {
+  elements.skillsModal.classList.add("hidden");
 }
 
 async function deleteSkillUi(name) {
@@ -1775,6 +1953,15 @@ function bindEvents() {
   document.querySelectorAll(".close-modal").forEach((button) => button.addEventListener("click", closeSettings));
   elements.newSession.addEventListener("click", newSession);
   elements.importSkill.addEventListener("click", importSkill);
+  elements.openSkillsModal.addEventListener("click", openSkillsModal);
+  document.querySelectorAll(".close-skills-modal").forEach((button) => button.addEventListener("click", closeSkillsModal));
+  elements.skillsModal.addEventListener("click", (event) => {
+    if (event.target === elements.skillsModal) closeSkillsModal();
+  });
+  elements.sessionManage.addEventListener("click", () => setSessionSelectMode(!state.selectMode));
+  elements.sessionManageDone.addEventListener("click", () => setSessionSelectMode(false));
+  elements.sessionSelectAll.addEventListener("change", (event) => toggleSelectAllSessions(event.target.checked));
+  elements.sessionDeleteSelected.addEventListener("click", deleteSelectedSessions);
   elements.workspaceSwitch.addEventListener("click", switchWorkspaceFolder);
   elements.closePreview.addEventListener("click", closePreview);
   elements.previewBackdrop.addEventListener("click", closePreview);
@@ -1789,6 +1976,7 @@ function bindEvents() {
     if (event.key === "Escape") {
       closePreview();
       if (!elements.settingsModal.classList.contains("hidden")) closeSettings();
+      if (!elements.skillsModal.classList.contains("hidden")) closeSkillsModal();
     }
   });
 }
