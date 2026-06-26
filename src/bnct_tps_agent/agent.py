@@ -297,6 +297,10 @@ class AgentRuntime:
     ) -> Iterator[dict[str, Any]]:
         alive = should_continue if should_continue is not None else (lambda: True)
         self.messages.append({"role": "user", "content": prompt})
+        # Separate consecutive reasoning rounds (each round = some thinking text
+        # followed by tool calls) with a blank line in the streamed output, so the
+        # rounds don't pile into one paragraph. A single-pass answer is unaffected.
+        emitted_text_before = False
         for step in range(self.settings.max_steps):
             if not alive():
                 self.messages.append({"role": "assistant", "content": "（已停止）"})
@@ -318,6 +322,7 @@ class AgentRuntime:
             content_parts: list[str] = []
             tool_fragments: dict[int, dict[str, Any]] = {}
             interrupted = False
+            step_emitted_text = False
             for chunk in completion_stream:
                 if not alive():
                     interrupted = True
@@ -334,6 +339,14 @@ class AgentRuntime:
                 text_delta = _field(delta, "content", None)
                 if text_delta:
                     text_delta = str(text_delta)
+                    # First visible text of a new reasoning round: prefix a blank
+                    # line so it reads as its own paragraph, not glued to the last
+                    # round. Only the stream gets the separator; the stored answer
+                    # text stays clean.
+                    if not step_emitted_text and emitted_text_before:
+                        yield {"type": "delta", "text": "\n\n"}
+                    step_emitted_text = True
+                    emitted_text_before = True
                     content_parts.append(text_delta)
                     yield {"type": "delta", "text": text_delta}
 

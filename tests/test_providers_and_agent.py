@@ -133,6 +133,42 @@ class ProviderAndAgentTests(unittest.TestCase):
         self.assertEqual(events[-1]["answer"], "流式")
         self.assertTrue(completions.requests[0]["stream"])
 
+    def test_consecutive_reasoning_rounds_are_separated_by_blank_line(self):
+        # Round 1: a thinking sentence + a tool call. Round 2: the final answer.
+        round_one = [
+            SimpleNamespace(id="r", choices=[SimpleNamespace(delta=SimpleNamespace(content="我先查一下"), finish_reason=None)]),
+            SimpleNamespace(
+                id="r",
+                choices=[SimpleNamespace(
+                    delta=SimpleNamespace(
+                        content=None,
+                        tool_calls=[SimpleNamespace(
+                            index=0,
+                            id="call-1",
+                            type="function",
+                            function=SimpleNamespace(name="list_project_files", arguments='{"pattern":"*","limit":3}'),
+                        )],
+                    ),
+                    finish_reason="tool_calls",
+                )],
+            ),
+        ]
+        round_two = [
+            SimpleNamespace(id="r", choices=[SimpleNamespace(delta=SimpleNamespace(content="查完了"), finish_reason="stop")]),
+        ]
+        completions = FakeStreamingCompletions([round_one, round_two])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        registry = FakeRegistry()
+        settings = Settings.load(self.root, provider="deepseek", api_key="test-key")
+        audit = AuditLogger(self.root / "tests" / "runtime_output" / "provider-rounds-audit")
+
+        events = list(AgentRuntime(settings, registry, audit, client=client).run_events("做个 PPT"))
+        deltas = [event["text"] for event in events if event["type"] == "delta"]
+        # A blank line separates round 1's thinking from round 2's text.
+        self.assertEqual(deltas, ["我先查一下", "\n\n", "查完了"])
+        # The stored answer stays clean (no leading separator).
+        self.assertEqual(events[-1]["answer"], "查完了")
+
 
 if __name__ == "__main__":
     unittest.main()
