@@ -393,7 +393,7 @@ svg {
 .message-meta { margin: 1px 0 8px; color: var(--muted); font-size: 11.5px; }
 .message.user .message-meta { display: none; }
 .message-content { color: #313d4a; font-size: 15px; line-height: 1.75; overflow-wrap: anywhere; }
-.message.system .message-avatar { background: rgba(217, 170, 94, 0.1); border-color: rgba(217, 170, 94, 0.18); color: var(--amber); }
+.message.system .message-avatar { background: var(--accent-soft); border-color: rgba(0, 64, 142, 0.2); color: var(--accent); }
 .message.system .message-content { color: var(--text-soft); }
 .message-attachments {
   display: flex;
@@ -499,7 +499,7 @@ svg {
   max-width: 620px;
   margin: 4px 0 12px;
   padding: 10px 12px;
-  background: rgba(246, 243, 238, 0.8);
+  background: rgba(238, 242, 248, 0.8);
   border: 1px solid var(--line-soft);
   border-radius: 12px;
   color: var(--text-soft);
@@ -545,7 +545,7 @@ svg {
 .activity-panel.done .activity-title > span { animation: none; background: var(--green); box-shadow: none; }
 .activity-panel.failed .activity-title > span { animation: none; background: var(--red); box-shadow: none; }
 
-.composer-zone { padding: 0 clamp(24px, 5vw, 86px) 14px; background: linear-gradient(to top, #f7fafd 80%, rgba(251, 250, 247, 0)); }
+.composer-zone { padding: 0 clamp(24px, 5vw, 86px) 14px; background: linear-gradient(to top, #f7fafd 80%, rgba(247, 250, 253, 0)); }
 .attachment-list {
   display: flex;
   flex-wrap: wrap;
