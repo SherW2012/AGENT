@@ -22,6 +22,10 @@ const state = {
   busy: false,
   eventTimer: null,
   lastEventId: 0,
+  abortController: null,
+  stopped: false,
+  lastSubmission: null,
+  dragDepth: 0,
 };
 
 const elements = {
@@ -116,7 +120,7 @@ async function api(path, options = {}) {
   return payload;
 }
 
-async function streamApi(path, payload, onEvent) {
+async function streamApi(path, payload, onEvent, signal) {
   let response;
   try {
     response = await fetch(path, {
@@ -126,8 +130,10 @@ async function streamApi(path, payload, onEvent) {
         "X-BNCT-Token": token,
       },
       body: JSON.stringify(payload),
+      signal,
     });
   } catch (error) {
+    if (error.name === "AbortError") throw error;
     throw new Error(`无法连接本地服务：${error.message}`);
   }
   if (!response.ok) {
@@ -191,7 +197,11 @@ function setConnection(mode, label) {
 
 function setBusy(busy) {
   state.busy = busy;
-  elements.send.disabled = busy;
+  // The send button doubles as a stop button while the agent is working, so it
+  // stays enabled (clicking it interrupts) instead of being greyed out.
+  elements.send.classList.toggle("is-busy", busy);
+  elements.send.setAttribute("aria-label", busy ? "停止生成" : "发送任务");
+  elements.send.title = busy ? "停止生成" : "";
   elements.prompt.disabled = busy;
   elements.attachButton.disabled = busy;
   if (busy) {
@@ -279,6 +289,122 @@ function safeLinkUrl(value) {
   }
 }
 
+// Lightweight, dependency-free syntax highlighter. The page runs under a strict
+// CSP (script-src 'self'), so we cannot pull in a CDN highlighter; this keeps an
+// IDE-like feel using token classes styled in styles.css. It never uses
+// innerHTML — every token becomes a textContent span, so it is XSS-safe.
+const HL_KEYWORDS = new Set([
+  "abstract", "and", "as", "async", "await", "break", "case", "catch", "class",
+  "const", "continue", "def", "default", "del", "do", "elif", "else", "enum",
+  "except", "export", "extends", "final", "finally", "fn", "for", "from", "func",
+  "function", "global", "if", "impl", "import", "in", "instanceof", "interface",
+  "is", "lambda", "let", "match", "mut", "new", "nonlocal", "not", "or", "package",
+  "pass", "private", "protected", "pub", "public", "raise", "return", "static",
+  "struct", "super", "switch", "this", "throw", "trait", "try", "type", "typeof",
+  "use", "var", "void", "while", "with", "yield", "where", "select", "from",
+  "go", "defer", "chan", "map", "range", "module", "namespace", "using", "include",
+]);
+const HL_LITERALS = new Set([
+  "true", "false", "null", "nil", "none", "undefined", "True", "False", "None",
+  "self", "NaN", "Infinity",
+]);
+const HL_TOKEN_RE = /(\/\*[\s\S]*?\*\/|\/\/[^\n]*|#[^\n]*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)|(\b\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?\b)|([A-Za-z_$][\w$]*)|([\s\S])/g;
+
+function appendTokenSpan(parent, className, text) {
+  const span = document.createElement("span");
+  span.className = className;
+  span.textContent = text;
+  parent.append(span);
+}
+
+function highlightInto(codeElement, source) {
+  codeElement.replaceChildren();
+  const text = String(source);
+  HL_TOKEN_RE.lastIndex = 0;
+  let match;
+  while ((match = HL_TOKEN_RE.exec(text)) !== null) {
+    const full = match[0];
+    if (match[1] !== undefined) {
+      appendTokenSpan(codeElement, "hl-com", full);
+    } else if (match[2] !== undefined) {
+      appendTokenSpan(codeElement, "hl-str", full);
+    } else if (match[3] !== undefined) {
+      appendTokenSpan(codeElement, "hl-num", full);
+    } else if (match[4] !== undefined) {
+      if (HL_KEYWORDS.has(full)) {
+        appendTokenSpan(codeElement, "hl-kw", full);
+      } else if (HL_LITERALS.has(full)) {
+        appendTokenSpan(codeElement, "hl-lit", full);
+      } else if (/^\s*\(/.test(text.slice(HL_TOKEN_RE.lastIndex))) {
+        appendTokenSpan(codeElement, "hl-fn", full);
+      } else {
+        codeElement.append(document.createTextNode(full));
+      }
+    } else {
+      codeElement.append(document.createTextNode(full));
+    }
+  }
+}
+
+function fallbackCopy(text) {
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.style.position = "fixed";
+  area.style.opacity = "0";
+  document.body.append(area);
+  area.select();
+  try {
+    document.execCommand("copy");
+  } finally {
+    area.remove();
+  }
+}
+
+async function copyText(text, button) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      fallbackCopy(text);
+    }
+    if (button) {
+      const original = button.dataset.label || button.textContent;
+      button.dataset.label = original;
+      button.textContent = "已复制";
+      button.classList.add("copied");
+      window.setTimeout(() => {
+        button.textContent = original;
+        button.classList.remove("copied");
+      }, 1400);
+    } else {
+      showToast("已复制");
+    }
+  } catch (error) {
+    showToast(`复制失败：${error.message}`, "error");
+  }
+}
+
+function makeCodeBlock(codeText, language) {
+  const wrap = document.createElement("div");
+  wrap.className = "code-block";
+  const pre = document.createElement("pre");
+  if (language) pre.dataset.language = language;
+  const code = document.createElement("code");
+  highlightInto(code, codeText);
+  pre.append(code);
+  const copyButton = document.createElement("button");
+  copyButton.type = "button";
+  copyButton.className = "code-copy-btn";
+  copyButton.title = "复制代码";
+  copyButton.textContent = "复制";
+  copyButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    copyText(codeText, copyButton);
+  });
+  wrap.append(copyButton, pre);
+  return wrap;
+}
+
 function renderInline(container, source) {
   let remaining = String(source);
   const tokenPattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\[[^\]\n]+\]\([^\s)]+\)|\*[^*\n]+\*|_[^_\n]+_)/;
@@ -356,12 +482,7 @@ function renderMarkdown(container, text) {
         index += 1;
       }
       if (index < lines.length) index += 1;
-      const pre = document.createElement("pre");
-      if (fence[1]) pre.dataset.language = fence[1];
-      const code = document.createElement("code");
-      code.textContent = codeLines.join("\n");
-      pre.append(code);
-      container.append(pre);
+      container.append(makeCodeBlock(codeLines.join("\n"), fence[1] || ""));
       continue;
     }
 
@@ -463,10 +584,61 @@ function renderMessageAttachments(container, attachments = []) {
   attachments.forEach((item) => {
     const chip = document.createElement("span");
     chip.className = "message-attachment";
-    chip.textContent = attachmentLabel(item);
+    const label = attachmentLabel(item);
+    chip.textContent = label;
+    chip.title = label;
     wrap.append(chip);
   });
   container.append(wrap);
+}
+
+function svgIcon(paths) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  (Array.isArray(paths) ? paths : [paths]).forEach((d) => {
+    const path = document.createElementNS(ns, "path");
+    path.setAttribute("d", d);
+    svg.append(path);
+  });
+  return svg;
+}
+
+function addMessageActions(article, rawText, retryTask) {
+  const body = article.querySelector(".message-body");
+  if (!body) return;
+  body.querySelector(".message-actions")?.remove();
+  const row = document.createElement("div");
+  row.className = "message-actions";
+
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "msg-action-btn";
+  copyBtn.title = "复制回答";
+  const copyLabel = document.createElement("span");
+  copyLabel.textContent = "复制";
+  copyBtn.append(svgIcon(["M9 9h9v11H9z", "M6 15H5V4h10v2"]), copyLabel);
+  copyBtn.addEventListener("click", () => copyText(rawText, copyLabel));
+  row.append(copyBtn);
+
+  if (retryTask) {
+    const retryBtn = document.createElement("button");
+    retryBtn.type = "button";
+    retryBtn.className = "msg-action-btn";
+    retryBtn.title = "用同一问题重新生成";
+    const retryLabel = document.createElement("span");
+    retryLabel.textContent = "重试";
+    retryBtn.append(svgIcon(["M20 11a8 8 0 1 0-2.1 5.4", "M20 5v6h-6"]), retryLabel);
+    retryBtn.addEventListener("click", () => {
+      if (state.busy) {
+        showToast("当前任务仍在执行", "error");
+        return;
+      }
+      sendTask(retryTask);
+    });
+    row.append(retryBtn);
+  }
+  body.append(row);
 }
 
 function appendMessage(role, text, options = {}) {
@@ -489,6 +661,7 @@ function appendMessage(role, text, options = {}) {
   renderMarkdown(content, text);
   body.append(meta, content);
   renderMessageAttachments(body, options.attachments || []);
+  if (options.withActions) addMessageActions(article, text, options.retryTask);
   article.append(avatar, body);
   elements.messageList.append(article);
   if (options.scroll !== false) {
@@ -613,12 +786,15 @@ function renderActivity() {
   });
 }
 
-function finalizeAssistantDraft() {
+function finalizeAssistantDraft(rawText = "", options = {}) {
   if (!state.activeDraft) return;
-  state.activeDraft.meta.textContent = "BNCT Agent";
-  setActivity("agent", "已完成", "done");
-  state.activeDraft.activity.classList.add("done");
-  state.activeDraft.article.removeAttribute("id");
+  const draft = state.activeDraft;
+  draft.meta.textContent = options.stopped ? "BNCT Agent · 已停止" : "BNCT Agent";
+  setActivity("agent", options.stopped ? "已停止" : "已完成", options.stopped ? "failed" : "done");
+  draft.activity.classList.add("done");
+  if (options.stopped) draft.activity.classList.add("failed");
+  draft.article.removeAttribute("id");
+  addMessageActions(draft.article, rawText, draft.task || "");
   state.activeDraft = null;
 }
 
@@ -704,11 +880,23 @@ function renderConversation(session) {
     showEmptyState();
   } else {
     hideEmptyState();
-    messages.forEach((message) => {
+    messages.forEach((message, idx) => {
+      const isAssistant = message.role === "assistant";
+      let retryTask = "";
+      if (isAssistant) {
+        for (let i = idx - 1; i >= 0; i -= 1) {
+          if (messages[i].role === "user") {
+            retryTask = messages[i].content || "";
+            break;
+          }
+        }
+      }
       appendMessage(message.role, message.content || "", {
         id: message.id,
         attachments: message.attachments || [],
         scroll: false,
+        withActions: isAssistant,
+        retryTask,
       });
     });
     window.setTimeout(() => {
@@ -845,6 +1033,14 @@ function stageSkillPrompt(skill) {
   showToast(`已将 ${displayName} 的使用说明放入输入框，请补充目标后发送。`);
 }
 
+function skillSubtitle(skill) {
+  const text = String(skill.shortDescription || skill.description || "").trim();
+  if (!text) return "本地 skill";
+  // One concise sentence; the panel keeps subtitles to a single line.
+  const firstSentence = text.split(/(?<=[。.!?！？])\s*/)[0].trim() || text;
+  return firstSentence.length > 40 ? `${firstSentence.slice(0, 40)}…` : firstSentence;
+}
+
 function renderSkills() {
   elements.skillList.replaceChildren();
   const skills = state.skills || [];
@@ -857,25 +1053,61 @@ function renderSkills() {
     return;
   }
   skills.forEach((skill, index) => {
+    const row = document.createElement("div");
+    row.className = "skill-row";
+
     const button = document.createElement("button");
     button.className = "skill-action";
     button.type = "button";
-    button.title = `${skill.name}\n${skill.description || ""}`;
+    button.title = `${skill.displayName || skill.name}\n${skill.description || ""}`;
     const icon = document.createElement("span");
     icon.className = `skill-icon ${skillTone(skill, index)}`;
     icon.textContent = skillInitial(skill);
     const copy = document.createElement("span");
+    copy.className = "skill-copy";
     const title = document.createElement("strong");
     title.textContent = skill.displayName || skill.name;
     const subtitle = document.createElement("small");
-    subtitle.textContent = skill.shortDescription || skill.description || skill.path;
+    subtitle.textContent = skillSubtitle(skill);
     copy.append(title, subtitle);
     button.append(icon, copy);
     button.addEventListener("click", () => {
       stageSkillPrompt(skill);
     });
-    elements.skillList.append(button);
+    row.append(button);
+
+    if (skill.removable) {
+      const remove = document.createElement("button");
+      remove.className = "skill-delete";
+      remove.type = "button";
+      remove.title = "删除该 skill";
+      remove.textContent = "×";
+      remove.addEventListener("click", (event) => {
+        event.stopPropagation();
+        deleteSkillUi(skill.name);
+      });
+      row.append(remove);
+    }
+    elements.skillList.append(row);
   });
+}
+
+async function deleteSkillUi(name) {
+  if (state.busy) {
+    showToast("当前任务仍在执行，请稍后再删除 skill", "error");
+    return;
+  }
+  if (!window.confirm(`删除 skill「${name}」？这会移除本地 skill 文件。`)) return;
+  try {
+    const result = await api("/api/delete-skill", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+    updateConfig(result.config);
+    showToast(`已删除 skill：${name}`);
+  } catch (error) {
+    showToast(error.message, "error");
+  }
 }
 
 async function loadFiles() {
@@ -903,7 +1135,7 @@ async function openPreview(path) {
       elements.previewContent.replaceChildren();
       const pre = document.createElement("pre");
       const code = document.createElement("code");
-      code.textContent = result.content;
+      highlightInto(code, result.content);
       pre.append(code);
       elements.previewContent.append(pre);
     }
@@ -1008,8 +1240,11 @@ function renderPendingAttachments() {
   state.pendingAttachments.forEach((item, index) => {
     const chip = document.createElement("span");
     chip.className = "attachment-chip";
+    const fullLabel = attachmentLabel(item);
+    chip.title = fullLabel;
     const label = document.createElement("span");
-    label.textContent = attachmentLabel(item);
+    label.className = "attachment-name";
+    label.textContent = fullLabel;
     const remove = document.createElement("button");
     remove.type = "button";
     remove.textContent = "×";
@@ -1145,8 +1380,13 @@ async function sendTask(prefilled = null) {
   renderPendingAttachments();
   elements.prompt.value = "";
   resizePrompt();
+  // Remember the submission so a Stop can restore it for editing and resending.
+  state.lastSubmission = { typed: typedTask, prefilled, attachments };
   appendMessage("user", task, { attachments: attachmentMetadata });
   appendAssistantDraft();
+  if (state.activeDraft) state.activeDraft.task = task;
+  state.abortController = new AbortController();
+  state.stopped = false;
   setBusy(true);
   let answerText = "";
   let completed = false;
@@ -1164,26 +1404,67 @@ async function sendTask(prefilled = null) {
           setDraftText(answerText);
         } else if (event.type === "done") {
           completed = true;
+          const stopped = Boolean(event.stopped) || state.stopped;
           answerText = event.answer || answerText || "模型未返回文本结果。";
           setDraftText(answerText);
           if (event.session) {
             state.currentSessionId = event.session.id;
           }
-          finalizeAssistantDraft();
+          finalizeAssistantDraft(answerText, { stopped });
+          if (stopped) restoreLastSubmission();
         }
       },
+      state.abortController.signal,
     );
     if (!completed) {
       setDraftText(answerText || "模型未返回文本结果。");
-      finalizeAssistantDraft();
+      finalizeAssistantDraft(answerText);
     }
     await loadSessions();
   } catch (error) {
-    failAssistantDraft(error.message);
-    appendMessage("system", `任务失败：${error.message}`);
+    if (error.name === "AbortError" || state.stopped) {
+      finalizeAssistantDraft(answerText, { stopped: true });
+      restoreLastSubmission();
+      showToast("已停止。可以编辑问题后重新发送。");
+      try {
+        await loadSessions();
+      } catch (_error) {
+        // Listing can briefly fail right after a stop; the next poll recovers.
+      }
+    } else {
+      failAssistantDraft(error.message);
+      appendMessage("system", `任务失败：${error.message}`);
+    }
   } finally {
+    state.abortController = null;
     setBusy(false);
   }
+}
+
+function stopTask() {
+  if (!state.busy) return;
+  state.stopped = true;
+  if (state.abortController) {
+    try {
+      state.abortController.abort();
+    } catch (_error) {
+      // Ignore: the fetch may have already settled.
+    }
+  }
+  api("/api/chat/stop", { method: "POST", body: "{}" }).catch(() => {});
+}
+
+function restoreLastSubmission() {
+  const submission = state.lastSubmission;
+  if (!submission) return;
+  const text = submission.prefilled != null ? String(submission.prefilled) : submission.typed;
+  if (text) elements.prompt.value = text;
+  if (Array.isArray(submission.attachments) && submission.attachments.length) {
+    state.pendingAttachments = submission.attachments.slice(0, MAX_ATTACHMENTS);
+    renderPendingAttachments();
+  }
+  resizePrompt();
+  elements.prompt.focus();
 }
 
 function handleServerEvent(event) {
@@ -1208,6 +1489,9 @@ function handleServerEvent(event) {
   }
   if (event.type === "agent_failed") {
     setActivity("agent", "任务失败", "failed");
+  }
+  if (event.type === "agent_stopped") {
+    setActivity("agent", "已停止", "failed");
   }
   if (event.type === "tool_started" && event.tool === "web_search") {
     showToast("正在联网搜索公开资料...");
@@ -1424,10 +1708,51 @@ function toggleSidebar(collapsed) {
   elements.appShell.classList.toggle("sidebar-collapsed", collapsed);
 }
 
+function bindDragAndDrop() {
+  const dropZone = document.querySelector(".conversation-panel");
+  if (!dropZone) return;
+  const hasFiles = (event) => Array.from(event.dataTransfer?.types || []).includes("Files");
+  const clearDrag = () => {
+    state.dragDepth = 0;
+    dropZone.classList.remove("drag-over");
+  };
+  dropZone.addEventListener("dragenter", (event) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    state.dragDepth += 1;
+    dropZone.classList.add("drag-over");
+  });
+  dropZone.addEventListener("dragover", (event) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+  });
+  dropZone.addEventListener("dragleave", (event) => {
+    if (!hasFiles(event)) return;
+    state.dragDepth -= 1;
+    if (state.dragDepth <= 0) clearDrag();
+  });
+  dropZone.addEventListener("drop", (event) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    clearDrag();
+    if (state.busy) {
+      showToast("当前任务仍在执行，请稍后再添加附件", "error");
+      return;
+    }
+    const files = event.dataTransfer?.files;
+    if (files && files.length) addAttachments(files);
+  });
+}
+
 function bindEvents() {
-  elements.send.addEventListener("click", () => sendTask());
+  elements.send.addEventListener("click", () => {
+    if (state.busy) stopTask();
+    else sendTask();
+  });
   elements.prompt.addEventListener("input", resizePrompt);
   elements.prompt.addEventListener("paste", handlePromptPaste);
+  bindDragAndDrop();
   elements.prompt.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();

@@ -22,9 +22,11 @@ def display_time(value: str) -> str:
 
 
 class SessionStore:
-    def __init__(self, root: Path):
-        self.root = root.resolve()
-        self.base = self.root / ".bnct_agent"
+    def __init__(self, data_dir: Path):
+        # data_dir is a stable per-user location (see config.user_data_dir), not
+        # the project root, so conversations persist across working-directory
+        # switches instead of being scoped to whatever folder is open.
+        self.base = data_dir.resolve()
         self.sessions_dir = self.base / "sessions"
         self.current_path = self.base / "current-session"
         self.sessions_dir.mkdir(parents=True, exist_ok=True)

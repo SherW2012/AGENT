@@ -65,6 +65,12 @@ class WebServerTests(unittest.TestCase):
             name: os.environ.pop(name, None)
             for name in ("OPENAI_API_KEY", "DEEPSEEK_API_KEY", "MOONSHOT_API_KEY")
         }
+        # Isolate the per-user data dir (sessions + imported skills) so the test
+        # never touches the developer's real ~/.bnct_agent.
+        cls.data_dir = cls.root / "tests" / "runtime_output" / f"data-{uuid.uuid4().hex}"
+        shutil.rmtree(cls.data_dir, ignore_errors=True)
+        cls.old_data_dir = os.environ.get("BNCT_AGENT_DATA_DIR")
+        os.environ["BNCT_AGENT_DATA_DIR"] = str(cls.data_dir)
         cls.state = ApplicationState(cls.root, "unit-test-token")
         cls.server = AgentHTTPServer(("127.0.0.1", 0), cls.state)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
@@ -79,6 +85,11 @@ class WebServerTests(unittest.TestCase):
         for name, value in cls.old_api_keys.items():
             if value is not None:
                 os.environ[name] = value
+        if cls.old_data_dir is None:
+            os.environ.pop("BNCT_AGENT_DATA_DIR", None)
+        else:
+            os.environ["BNCT_AGENT_DATA_DIR"] = cls.old_data_dir
+        shutil.rmtree(cls.data_dir, ignore_errors=True)
 
     def _json(self, path):
         request = Request(self.base + path, headers={"X-BNCT-Token": "unit-test-token"})

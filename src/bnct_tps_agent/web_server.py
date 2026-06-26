@@ -270,9 +270,13 @@ class ApplicationState:
         self._events: list[dict[str, Any]] = []
         self._approvals: dict[str, PendingApproval] = {}
         self.settings = Settings.load(root, interactive=True)
-        self.sessions = SessionStore(self.settings.root)
+        # Sessions and imported skills live in a stable per-user data dir, not the
+        # working directory, so they survive switching the project folder.
+        self.data_dir = self.settings.data_dir
+        self.sessions = SessionStore(self.data_dir)
         self.current_session_id = self.sessions.current_id()
-        self.skill_registry = SkillRegistry(self.settings.root)
+        self.skill_registry = SkillRegistry(self.settings.root, self.data_dir)
+        self._interrupt = threading.Event()
         self._credentials: dict[str, str] = {}
         if self.settings.api_key:
             self._credentials[self.settings.provider] = self.settings.api_key
@@ -288,7 +292,7 @@ class ApplicationState:
                 self._event_id = 0
             self.audit = AuditLogger(self.settings.audit_dir)
             policy = SafetyPolicy(self._request_approval)
-            self.skill_registry = SkillRegistry(self.settings.root)
+            self.skill_registry = SkillRegistry(self.settings.root, self.data_dir)
             self.registry = ToolRegistry(
                 self.settings.root,
                 policy,
@@ -351,6 +355,21 @@ class ApplicationState:
         self.add_event({"type": "skill_imported", "skill": skill["name"]})
         return {"skill": skill, "config": self.config()}
 
+    def delete_skill(self, name: str) -> dict[str, Any]:
+        if self._chat_lock.locked():
+            raise RuntimeError("当前任务仍在执行，请稍后再删除 skill")
+        removed = self.skill_registry.delete_skill(name)
+        self._rebuild_runtime(clear_events=False)
+        self.add_event({"type": "skill_deleted", "skill": removed["name"]})
+        return {"skill": removed, "config": self.config()}
+
+    def stop(self) -> dict[str, Any]:
+        # Cooperative interrupt: the streaming agent loop checks this flag between
+        # model chunks and tool rounds and stops as soon as possible.
+        self._interrupt.set()
+        self.add_event({"type": "agent_stop_requested"})
+        return {"ok": True}
+
     def configure(self, payload: dict[str, Any]) -> dict[str, Any]:
         if self._chat_lock.locked():
             raise RuntimeError("当前任务仍在执行，请稍后再修改设置")
@@ -381,7 +400,9 @@ class ApplicationState:
         if loaded.api_key:
             self._credentials[provider] = loaded.api_key
         self.settings = loaded
-        self.sessions = SessionStore(self.settings.root)
+        # Sessions persist in the per-user data dir; switching the working
+        # directory must not drop the conversation history, so the SessionStore
+        # is intentionally NOT rebuilt here.
         self.current_session_id = self.sessions.current_id()
         self._rebuild_runtime(clear_events=True)
         self.add_event({"type": "session_configured", "provider": provider, "model": model})
@@ -472,10 +493,13 @@ class ApplicationState:
             history = self.sessions.recent_context(self.current_session_id)
             effective_task = build_task_prompt(task, history, prompt_attachments)
             self.sessions.add_message(self.current_session_id, "user", task, stored_attachments)
+            self._interrupt.clear()
             self.add_event({"type": "agent_started"})
             answer = ""
             emitted_done = False
-            for event in self.runtime.run_events(effective_task):
+            for event in self.runtime.run_events(
+                effective_task, should_continue=lambda: not self._interrupt.is_set()
+            ):
                 event_type = str(event.get("type") or "")
                 if event_type == "delta":
                     answer += str(event.get("text") or "")
@@ -483,15 +507,19 @@ class ApplicationState:
                 elif event_type == "done":
                     emitted_done = True
                     answer = str(event.get("answer") or answer)
+                    stopped = self._interrupt.is_set()
+                    if stopped and not answer:
+                        answer = "（已停止）"
                     self.sessions.add_message(self.current_session_id, "assistant", answer)
-                    self.add_event({"type": "agent_finished"})
-                    yield {**event, "answer": answer, "session": self.sessions.get(self.current_session_id)}
+                    self.add_event({"type": "agent_stopped" if stopped else "agent_finished"})
+                    yield {**event, "answer": answer, "stopped": stopped, "session": self.sessions.get(self.current_session_id)}
                 else:
                     yield event
             if not emitted_done:
-                self.sessions.add_message(self.current_session_id, "assistant", answer)
-                self.add_event({"type": "agent_finished"})
-                yield {"type": "done", "answer": answer, "session": self.sessions.get(self.current_session_id)}
+                stopped = self._interrupt.is_set()
+                self.sessions.add_message(self.current_session_id, "assistant", answer or "（已停止）")
+                self.add_event({"type": "agent_stopped" if stopped else "agent_finished"})
+                yield {"type": "done", "answer": answer, "stopped": stopped, "session": self.sessions.get(self.current_session_id)}
         except Exception:
             self.add_event({"type": "agent_failed"})
             raise
@@ -713,6 +741,10 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
                     self._send_json({"cancelled": True})
                 else:
                     self._send_json(self.server.state.import_skill(source))
+            elif parsed.path == "/api/delete-skill":
+                self._send_json(self.server.state.delete_skill(str(payload.get("name") or "")))
+            elif parsed.path == "/api/chat/stop":
+                self._send_json(self.server.state.stop())
             elif parsed.path == "/api/chat":
                 self._send_json(
                     self.server.state.chat(

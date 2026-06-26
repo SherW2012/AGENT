@@ -93,12 +93,41 @@ def parse_skill_markdown(text: str) -> tuple[dict[str, Any], str]:
 
 
 class SkillRegistry:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, data_dir: Path | None = None):
         self.root = root.resolve()
+        # data_dir hosts user-level skills that persist across working-directory
+        # switches. When provided, imports land here instead of the project's
+        # .agent/skills, so installed skills do not disappear when the workspace
+        # changes (see config.user_data_dir).
+        self.data_dir = data_dir.resolve() if data_dir is not None else None
         self._skills = self._discover()
 
     def _skill_roots(self) -> list[Path]:
-        return [(self.root / relative).resolve() for relative in SKILL_ROOTS]
+        roots = [(self.root / relative).resolve() for relative in SKILL_ROOTS]
+        if self.data_dir is not None:
+            roots.append((self.data_dir / "skills").resolve())
+        return roots
+
+    def _import_base(self) -> Path:
+        if self.data_dir is not None:
+            return (self.data_dir / "skills").resolve()
+        return (self.root / ".agent" / "skills").resolve()
+
+    def _removable_bases(self) -> list[Path]:
+        bases = [(self.root / ".agent" / "skills").resolve()]
+        if self.data_dir is not None:
+            bases.append((self.data_dir / "skills").resolve())
+        return bases
+
+    def _display_path(self, path: Path) -> str:
+        for base in (self.root, self.data_dir):
+            if base is None:
+                continue
+            try:
+                return path.relative_to(base).as_posix()
+            except ValueError:
+                continue
+        return path.as_posix()
 
     def _discover(self) -> dict[str, Skill]:
         skills: dict[str, Skill] = {}
@@ -144,7 +173,8 @@ class SkillRegistry:
                     "shortDescription": str(skill.metadata.get("short_description") or skill.description),
                     "defaultPrompt": str(skill.metadata.get("default_prompt") or ""),
                     "description": skill.description,
-                    "path": skill.path.relative_to(self.root).as_posix(),
+                    "path": self._display_path(skill.path),
+                    "removable": self.is_removable(skill),
                     "trusted": skill.trusted,
                     "visibility": skill.visibility,
                     "hasProcessor": bool(skill.processor),
@@ -167,7 +197,7 @@ class SkillRegistry:
             raise ValueError("Skill name 只能使用字母、数字、下划线或短横线")
         if name in self._skills:
             raise ValueError(f"Skill 已存在: {name}")
-        target = (self.root / ".agent" / "skills" / name).resolve()
+        target = (self._import_base() / name).resolve()
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
             target.relative_to(source_path)
@@ -184,6 +214,26 @@ class SkillRegistry:
 
         with stage_github_skill(url, ref=ref, temp_parent=self.root / ".bnct_agent" / "tmp") as source:
             return self.import_skill(source)
+
+    def is_removable(self, skill: Skill) -> bool:
+        for base in self._removable_bases():
+            try:
+                skill.path.relative_to(base)
+                return True
+            except ValueError:
+                continue
+        return False
+
+    def delete_skill(self, name: str) -> dict[str, Any]:
+        skill = self.get(name)
+        if not self.is_removable(skill):
+            raise PermissionError(
+                f"Skill {name} 是项目内置 skill（位于版本库的 skills/ 目录），"
+                "不能从界面删除；如需移除请在代码仓库中处理。"
+            )
+        shutil.rmtree(skill.path, ignore_errors=True)
+        self.refresh()
+        return {"name": name}
 
     def catalog_context(self) -> str:
         catalog = self.public_catalog(include_background=True)
@@ -220,7 +270,7 @@ class SkillRegistry:
         return {
             "name": skill.name,
             "description": skill.description,
-            "path": skill.path.relative_to(self.root).as_posix(),
+            "path": self._display_path(skill.path),
             "trusted": skill.trusted,
             "metadata": skill.metadata,
             "content": content,

@@ -22,37 +22,22 @@ DEFAULT_FETCH_CHARS = 40_000
 MAX_FETCH_CHARS = 80_000
 MAX_FETCH_URL_CHARS = 2048
 WEB_SEARCH_NETWORKS = {"auto", "direct", "system"}
-CJK_QUERY_FILLER_RE = re.compile(
-    r"(最新动态|最新消息|最新进展|实时动态|发展速度|发展进度|进展情况|"
-    r"是不是|是否|有没有|怎么样|如何|哪个|哪家|哪些|比较|相比|"
-    r"从|上看|来看|而言|更快|更慢|更好|更强|的|了|吗|呢|吧)"
-)
-CURRENT_QUERY_TERMS = (
-    "latest",
-    "current",
-    "recent",
-    "today",
-    "news",
-    "progress",
-    "update",
-    "updates",
-    "release",
-)
-CURRENT_QUERY_CJK_TERMS = (
-    "最新",
-    "动态",
-    "新闻",
-    "今日",
-    "近期",
-    "前沿",
-    "进展",
-    "进度",
-    "发展",
-    "发布",
-    "获批",
-    "上市",
-)
 
+# NOTE: Recency / time-sensitivity is decided by the model via the web_search
+# tool's `recency` argument, NOT by a hardcoded keyword whitelist. Different
+# users phrase "I want the latest information" in countless ways, so judging it
+# in code with a fixed term list is both brittle and wrong. The model reads the
+# question and sets recency=True when fresh sources are warranted.
+#
+# The query itself is always sent to the search engine verbatim as a natural
+# language string. We never tokenize it into single characters; the engine's
+# own ranking decides relevance. Bing is the primary backend because it handles
+# Chinese (and other non-Latin) natural-language queries well and is reachable
+# without a VPN; DuckDuckGo is only a fallback.
+
+# These patterns are a privacy guardrail (keep secrets / patient identifiers out
+# of outbound queries), which is a deliberate safety boundary -- not a heuristic
+# for guessing user intent.
 SENSITIVE_QUERY_PATTERNS = [
     re.compile(r"\b[A-Za-z]:\\"),
     re.compile(r"\\\\[A-Za-z0-9_.-]+\\"),
@@ -407,71 +392,52 @@ def fetch_url(_root: Path, url: str, max_chars: int = DEFAULT_FETCH_CHARS, netwo
     }
 
 
-def _looks_like_current_query(query: str) -> bool:
-    lowered = query.lower()
-    return any(term in lowered for term in CURRENT_QUERY_TERMS) or any(term in query for term in CURRENT_QUERY_CJK_TERMS)
+def _search_sources(query: str, recency: bool) -> list[tuple[str, str]]:
+    """Return ordered (source_id, url) pairs for the verbatim query.
 
-
-def _query_variants(query: str) -> list[str]:
-    clean = query.strip()
-    return [clean] if clean else []
-
-
-def _search_sources(query: str) -> list[tuple[str, str, str]]:
-    sources: list[tuple[str, str, str]] = []
-    current = _looks_like_current_query(query)
-    for variant in _query_variants(query):
-        encoded = urlencode({"q": variant})
-        plus_query = quote_plus(variant)
-        if current:
-            sources.extend(
-                [
-                    (
-                        "google-news-rss",
-                        "https://news.google.com/rss/search?"
-                        + urlencode({"q": variant, "hl": "zh-CN", "gl": "CN", "ceid": "CN:zh-Hans"}),
-                        variant,
-                    ),
-                    ("bing-news-rss", f"https://www.bing.com/news/search?q={plus_query}&format=rss", variant),
-                ]
-            )
+    The query is passed to each engine unchanged. Bing leads because it handles
+    natural-language and CJK queries far better than DuckDuckGo's HTML endpoint
+    and is reachable without a VPN. News/RSS feeds are only consulted first when
+    the model flagged the question as time-sensitive (recency=True)."""
+    encoded = urlencode({"q": query})
+    plus_query = quote_plus(query)
+    sources: list[tuple[str, str]] = []
+    if recency:
         sources.extend(
             [
-                ("duckduckgo-html", "https://duckduckgo.com/html/?" + encoded, variant),
-                ("duckduckgo-rss", "https://duckduckgo.com/rss/?" + encoded, variant),
-                ("bing-html", f"https://www.bing.com/search?q={plus_query}&setlang=zh-CN", variant),
+                ("bing-news-rss", f"https://www.bing.com/news/search?q={plus_query}&format=rss"),
+                (
+                    "google-news-rss",
+                    "https://news.google.com/rss/search?"
+                    + urlencode({"q": query, "hl": "zh-CN", "gl": "CN", "ceid": "CN:zh-Hans"}),
+                ),
             ]
         )
+    sources.extend(
+        [
+            ("bing-html", f"https://www.bing.com/search?q={plus_query}&setlang=zh-CN"),
+            ("duckduckgo-html", "https://duckduckgo.com/html/?" + encoded),
+            ("duckduckgo-rss", "https://duckduckgo.com/rss/?" + encoded),
+        ]
+    )
     return sources
 
 
-def _query_focus_terms(query: str) -> list[str]:
-    lowered = query.lower()
-    latin = re.findall(r"[a-zA-Z][a-zA-Z0-9_-]{2,}", lowered)
-    cjk_text = re.sub(r"[^\u4e00-\u9fff]+", " ", query)
-    cjk_text = CJK_QUERY_FILLER_RE.sub(" ", cjk_text)
-    cjk = []
-    for chunk in re.findall(r"[\u4e00-\u9fff]{2,}", cjk_text):
-        if len(chunk) <= 12:
-            cjk.append(chunk)
-            continue
-        cjk.extend(re.findall(r"[\u4e00-\u9fff]{2,8}", chunk))
-    return list(dict.fromkeys([*latin, *cjk]))[:8]
+def _parse_results(source: str, body: str, limit: int) -> list[dict[str, str]]:
+    if source in {"duckduckgo-rss", "google-news-rss", "bing-news-rss"}:
+        return parse_duckduckgo_rss(body, limit)
+    if source == "bing-html":
+        return parse_bing_html(body, limit)
+    return parse_duckduckgo_html(body, limit)
 
 
-def _filter_relevant_results(query: str, results: list[dict[str, str]]) -> list[dict[str, str]]:
-    focus_terms = _query_focus_terms(query)
-    if not focus_terms:
-        return results
-    filtered = []
-    for result in results:
-        haystack = " ".join(str(result.get(key) or "") for key in ("title", "snippet", "url")).lower()
-        if any(term.lower() in haystack for term in focus_terms):
-            filtered.append(result)
-    return filtered or results
-
-
-def web_search(_root: Path, query: str, max_results: int = DEFAULT_MAX_RESULTS, network: str = "auto") -> dict[str, Any]:
+def web_search(
+    _root: Path,
+    query: str,
+    max_results: int = DEFAULT_MAX_RESULTS,
+    network: str = "auto",
+    recency: bool = False,
+) -> dict[str, Any]:
     clean_query = str(query or "").strip()
     if not clean_query:
         raise ValueError("web_search query cannot be empty")
@@ -485,30 +451,27 @@ def web_search(_root: Path, query: str, max_results: int = DEFAULT_MAX_RESULTS, 
     network = str(network or "auto").strip().lower()
     if network not in WEB_SEARCH_NETWORKS:
         network = "auto"
+    recency = bool(recency)
 
     diagnostics = []
     results: list[dict[str, str]] = []
     source_used = ""
-    for source, url, variant in _search_sources(clean_query):
+    for source, url in _search_sources(clean_query, recency):
         try:
             body = _fetch_text(url, network=network)
         except OSError as exc:
             diagnostics.append({"source": source, "network": network, "errorType": type(exc).__name__, "message": str(exc)[:420]})
             continue
-        if source in {"duckduckgo-rss", "google-news-rss", "bing-news-rss"}:
-            results = parse_duckduckgo_rss(body, limit)
-        elif source == "bing-html":
-            results = parse_bing_html(body, limit)
-        else:
-            results = parse_duckduckgo_html(body, limit)
-        results = _filter_relevant_results(variant, results)
+        # Trust the engine's own ranking; we only de-duplicate inside the
+        # parsers. We never post-filter by chopping the query into fragments.
+        results = _parse_results(source, body, limit)
         if results:
             source_used = source
             break
 
     return {
         "query": clean_query,
-        "queryVariant": variant if results else "",
+        "recency": recency,
         "source": source_used or "none",
         "network": network,
         "searchedAt": time.strftime("%Y-%m-%d %H:%M:%S"),

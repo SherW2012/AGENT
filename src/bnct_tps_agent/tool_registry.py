@@ -216,21 +216,31 @@ class ToolRegistry:
             tools.append(
                 Tool(
                     "web_search",
-                    "Search the public web for current external information. Do not include patient identifiers, secrets, internal paths, or private code in the query.",
+                    (
+                        "Search the public web for external information. Pass the query as a "
+                        "complete natural-language phrase exactly as a person would type it; do "
+                        "not split it into single words or characters. Set recency=true only when "
+                        "the answer depends on current/changing facts (news, releases, prices, "
+                        "dates, latest standards) so that fresh news sources are consulted first; "
+                        "set recency=false for stable knowledge. Never include patient identifiers, "
+                        "secrets, internal paths, or private code in the query."
+                    ),
                     {
                         **object_schema,
                         "properties": {
                             "query": {"type": "string"},
                             "max_results": {"type": "integer"},
+                            "recency": {"type": "boolean"},
                         },
-                        "required": ["query", "max_results"],
+                        "required": ["query", "max_results", "recency"],
                     },
                     Risk.READ,
-                    lambda root, query, max_results: web_search(
+                    lambda root, query, max_results, recency: web_search(
                         root,
                         query,
                         max_results=max_results,
                         network=self.web_search_network,
+                        recency=recency,
                     ),
                     risk_resolver=self._web_search_risk,
                 )

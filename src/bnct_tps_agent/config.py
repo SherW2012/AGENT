@@ -11,6 +11,18 @@ WEB_SEARCH_MODES = {"auto", "ask", "off"}
 WEB_SEARCH_NETWORKS = {"auto", "direct", "system"}
 
 
+def user_data_dir() -> Path:
+    """Stable per-user location for sessions and imported skills.
+
+    Sessions and imported skills must survive switching the working directory,
+    so they live here instead of under the project root. Overridable with
+    BNCT_AGENT_DATA_DIR (used by tests and locked-down deployments)."""
+    override = os.getenv("BNCT_AGENT_DATA_DIR")
+    if override:
+        return Path(override).expanduser().resolve()
+    return (Path.home() / ".bnct_agent").resolve()
+
+
 @dataclass(frozen=True)
 class Settings:
     root: Path
@@ -19,6 +31,7 @@ class Settings:
     api_key: str | None
     base_url: str | None
     audit_dir: Path
+    data_dir: Path
     max_steps: int = 12
     interactive: bool = True
     web_search_mode: str = "auto"
@@ -69,6 +82,7 @@ class Settings:
             api_key=api_key or os.getenv(profile.key_env),
             base_url=configured_base_url,
             audit_dir=resolved_root / ".bnct_agent" / "audit",
+            data_dir=user_data_dir(),
             max_steps=max_steps,
             interactive=interactive,
             web_search_mode=configured_web_search_mode,

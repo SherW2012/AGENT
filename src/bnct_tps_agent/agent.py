@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from .audit import AuditLogger, sha256_text
 from .config import Settings
@@ -47,13 +47,22 @@ Skill behavior:
   explain the limitation and ask for a local folder or SKILL.md content.
 
 Web search behavior:
-- If web search is enabled and a question depends on current or changing public
-  facts, use web_search unless the user explicitly asks you to stay offline.
+- If web search is enabled and a question depends on external public facts you
+  are unsure about, use web_search unless the user explicitly asks you to stay
+  offline. You decide whether the question needs the web by reading it; there is
+  no fixed keyword list.
+- Pass the query to web_search as a complete, natural-language phrase, exactly
+  as a person would type it. Never break a sentence into individual words or
+  single characters, and do not strip it down to disconnected keywords -- the
+  search engine ranks natural-language queries on its own.
+- Judge time-sensitivity yourself and set the web_search `recency` argument
+  accordingly: recency=true when the answer depends on current or changing facts
+  (news, releases, prices, dates, the newest standards or papers); recency=false
+  for stable background knowledge. Do not rely on the user using words like
+  "latest" or "最新"; infer the need for fresh information from the actual intent.
 - If the user gives an explicit public http(s) URL and asks you to open, read,
   inspect, analyze, summarize, or install from it, use fetch_url directly
   instead of trying to rediscover the same URL through web_search.
-- If the user asks for latest, current, recent, today's, front-line, 前沿, 最新,
-  or up-to-date information, use web_search before answering.
 - Never include patient identifiers, secrets, API keys, internal paths, private
   hostnames, private source code, or company-confidential details in a web query.
   Sanitize to generic public terms or ask for approval when needed.
@@ -155,7 +164,11 @@ class AgentRuntime:
             return self._run_responses(prompt)
         return self._run_chat_completions(prompt)
 
-    def run_events(self, prompt: str) -> Iterator[dict[str, Any]]:
+    def run_events(
+        self,
+        prompt: str,
+        should_continue: "Callable[[], bool] | None" = None,
+    ) -> Iterator[dict[str, Any]]:
         if not prompt.strip():
             raise ValueError("任务不能为空")
         ensure_prompt_is_deidentified(prompt)
@@ -172,14 +185,14 @@ class AgentRuntime:
             # OpenAI-compatible Chat Completions providers. Keep OpenAI correct
             # by falling back to the existing path while still using the same UI
             # stream envelope.
-            text = self._run_responses(prompt)
+            text = self._run_responses(prompt, should_continue=should_continue)
             yield {"type": "delta", "text": text}
             yield {"type": "done", "answer": text}
             return
-        text = yield from self._run_chat_completions_events(prompt)
+        text = yield from self._run_chat_completions_events(prompt, should_continue)
         yield {"type": "done", "answer": text}
 
-    def _run_responses(self, prompt: str) -> str:
+    def _run_responses(self, prompt: str, should_continue: Callable[[], bool] | None = None) -> str:
         request: dict[str, Any] = dict(
             model=self.settings.model,
             instructions=self.instructions,
@@ -191,6 +204,9 @@ class AgentRuntime:
         response = self.client.responses.create(**request)
 
         for step in range(self.settings.max_steps):
+            if should_continue is not None and not should_continue():
+                self.previous_response_id = response.id
+                return getattr(response, "output_text", "") or "（已停止）"
             calls = [item for item in response.output if getattr(item, "type", None) == "function_call"]
             if not calls:
                 text = getattr(response, "output_text", "") or "模型未返回文本结果。"
@@ -276,9 +292,15 @@ class AgentRuntime:
         self.audit.record("request_stopped", reason="max_steps", max_steps=self.settings.max_steps)
         raise RuntimeError("超过最大工具调用轮数，已停止以避免失控循环")
 
-    def _run_chat_completions_events(self, prompt: str) -> Iterator[dict[str, Any]]:
+    def _run_chat_completions_events(
+        self, prompt: str, should_continue: Callable[[], bool] | None = None
+    ) -> Iterator[dict[str, Any]]:
+        alive = should_continue if should_continue is not None else (lambda: True)
         self.messages.append({"role": "user", "content": prompt})
         for step in range(self.settings.max_steps):
+            if not alive():
+                self.messages.append({"role": "assistant", "content": "（已停止）"})
+                return "（已停止）"
             try:
                 completion_stream = self.client.chat.completions.create(
                     model=self.settings.model,
@@ -295,7 +317,11 @@ class AgentRuntime:
             response_id = ""
             content_parts: list[str] = []
             tool_fragments: dict[int, dict[str, Any]] = {}
+            interrupted = False
             for chunk in completion_stream:
+                if not alive():
+                    interrupted = True
+                    break
                 response_id = str(_field(chunk, "id", response_id) or response_id)
                 choices = _field(chunk, "choices", []) or []
                 if not choices:
@@ -331,6 +357,12 @@ class AgentRuntime:
                         arguments = _field(function, "arguments", None)
                         if arguments:
                             fragment["function"]["arguments"] += str(arguments)
+
+            if interrupted:
+                text = "".join(content_parts) or "（已停止）"
+                self.messages.append({"role": "assistant", "content": text})
+                self.audit.record("request_stopped", reason="user_interrupt", streaming=True)
+                return text
 
             calls = [tool_fragments[index] for index in sorted(tool_fragments)]
             if not calls:

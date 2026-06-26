@@ -67,7 +67,19 @@ svg {
 }
 
 .app-shell.sidebar-collapsed { grid-template-columns: 0 minmax(560px, 1fr) 320px; }
-.app-shell.sidebar-collapsed .session-sidebar { transform: translateX(-100%); pointer-events: none; }
+/* Collapse fully: a 0-width track alone still let the fixed-width children
+   (brand, search, session list, status) spill out, so clamp width and clip. */
+.app-shell.sidebar-collapsed .session-sidebar {
+  width: 0;
+  min-width: 0;
+  padding-left: 0;
+  padding-right: 0;
+  border-right-color: transparent;
+  overflow: hidden;
+  opacity: 0;
+  transform: none;
+  pointer-events: none;
+}
 .app-shell.sidebar-collapsed .mobile-sidebar-button { display: block; }
 
 .session-sidebar {
@@ -394,6 +406,7 @@ svg {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   max-width: 260px;
   padding: 5px 8px;
   background: rgba(116, 105, 182, 0.08);
@@ -402,6 +415,19 @@ svg {
   color: var(--text-soft);
   font-family: var(--mono);
   font-size: 11px;
+}
+/* Long file names stay on one line and end in an ellipsis; the full name is in
+   the chip's title attribute (hover to read it). */
+.message-attachment {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.attachment-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .markdown-body p { margin: 0 0 11px; white-space: pre-wrap; }
@@ -447,7 +473,7 @@ svg {
   content: attr(data-language);
   position: absolute;
   top: 7px;
-  right: 10px;
+  left: 14px;
   color: var(--muted);
   font-size: 9.5px;
   letter-spacing: 0.08em;
@@ -885,6 +911,116 @@ svg {
 .toast-stack { position: fixed; right: 18px; bottom: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 40; }
 .toast { max-width: 380px; padding: 12px 14px; background: #fffefa; border: 1px solid var(--line); border-radius: 9px; box-shadow: var(--shadow); color: var(--text-soft); font-size: 12px; animation: toast-in 160ms ease-out; }
 .toast.error { border-color: rgba(185, 85, 85, 0.35); color: #a74646; }
+
+/* --- Code blocks: copy button (#8) + syntax highlighting (#7) --- */
+.code-block { position: relative; margin: 12px 0 16px; }
+.code-block pre { margin: 0; }
+.code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 1;
+  padding: 3px 9px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text-soft);
+  cursor: pointer;
+  font-family: var(--sans);
+  font-size: 10.5px;
+  opacity: 0;
+  transition: opacity 130ms ease, background 130ms ease, color 130ms ease;
+}
+.code-block:hover .code-copy-btn,
+.code-copy-btn:focus-visible { opacity: 1; }
+.code-copy-btn:hover { background: #fff; color: var(--text); border-color: #c2bbac; }
+.code-copy-btn.copied { color: var(--green); border-color: rgba(79, 138, 105, 0.5); }
+
+/* Token colors for the dependency-free highlighter. */
+.markdown-body pre code .hl-com,
+.file-preview pre code .hl-com { color: #8a8175; font-style: italic; }
+.markdown-body pre code .hl-str,
+.file-preview pre code .hl-str { color: #4f8a4f; }
+.markdown-body pre code .hl-num,
+.file-preview pre code .hl-num { color: #b06a2c; }
+.markdown-body pre code .hl-kw,
+.file-preview pre code .hl-kw { color: #9b3fb0; font-weight: 640; }
+.markdown-body pre code .hl-lit,
+.file-preview pre code .hl-lit { color: #b65335; }
+.markdown-body pre code .hl-fn,
+.file-preview pre code .hl-fn { color: #2f6db0; }
+
+/* --- Per-message copy / retry actions (#9) --- */
+.message-actions { display: flex; gap: 6px; margin-top: 9px; opacity: 0.55; transition: opacity 120ms ease; }
+.message:hover .message-actions { opacity: 1; }
+.msg-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  background: transparent;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11.5px;
+}
+.msg-action-btn:hover { background: var(--panel-3); border-color: var(--line); color: var(--text); }
+.msg-action-btn svg { width: 14px; height: 14px; }
+.msg-action-btn .copied { color: var(--green); }
+
+/* --- Skill rows: delete control (#10) --- */
+.skill-row { position: relative; display: flex; align-items: center; }
+.skill-row .skill-action { flex: 1; min-width: 0; }
+.skill-copy { min-width: 0; }
+.skill-action strong,
+.skill-action small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.skill-delete {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 15px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.skill-row:hover .skill-delete,
+.skill-delete:focus-visible { opacity: 1; }
+.skill-delete:hover { background: rgba(185, 85, 85, 0.12); border-color: rgba(185, 85, 85, 0.4); color: var(--red); }
+
+/* --- Send button doubles as a stop button while busy (#1) --- */
+.send-button .icon-stop { display: none; }
+.send-button .icon-stop rect { fill: currentColor; stroke: none; }
+.send-button.is-busy { background: var(--red); }
+.send-button.is-busy:hover { background: #a64a4a; }
+.send-button.is-busy .icon-send { display: none; }
+.send-button.is-busy .icon-stop { display: block; }
+
+/* --- Drag-and-drop attachment hint (#2) --- */
+.conversation-panel.drag-over::after {
+  content: "松开即可添加为附件";
+  position: absolute;
+  inset: 12px;
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  background: rgba(201, 100, 66, 0.07);
+  border: 2px dashed rgba(201, 100, 66, 0.55);
+  border-radius: 18px;
+  color: var(--accent-bright);
+  font-size: 15px;
+  font-weight: 640;
+  pointer-events: none;
+}
 
 @keyframes pulse { 50% { opacity: 0.38; } }
 @keyframes typing { 0%, 60%, 100% { transform: translateY(0); opacity: 0.4; } 30% { transform: translateY(-4px); opacity: 1; } }

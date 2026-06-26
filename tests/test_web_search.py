@@ -127,10 +127,23 @@ class WebSearchTests(unittest.TestCase):
         self.assertEqual(open_url.call_args.kwargs["network"], "direct")
 
     def test_web_search_falls_back_when_first_source_is_empty(self):
+        # recency=True consults news feeds first (bing-news-rss, then google-news-rss).
         with patch("bnct_tps_agent.web_search._open_url", side_effect=[FakeResponse("<html></html>"), FakeResponse(RSS)]):
-            result = web_search(self.root, "前沿技术最新动态", max_results=2)
-        self.assertEqual(result["source"], "bing-news-rss")
+            result = web_search(self.root, "前沿技术最新动态", max_results=2, recency=True)
+        self.assertEqual(result["source"], "google-news-rss")
+        self.assertTrue(result["recency"])
         self.assertEqual(result["results"][0]["url"], "https://example.com/frontier-tech")
+
+    def test_web_search_query_is_not_split_into_fragments(self):
+        # A natural-language CJK question must reach the engine verbatim, and a
+        # Bing result must be returned as-is without keyword post-filtering.
+        with patch("bnct_tps_agent.web_search._fetch_text", return_value=BING) as fetch_text:
+            result = web_search(self.root, "硼中子俘获治疗的最新临床进展是什么", max_results=3)
+        # First source consulted is bing-html with the full query in the URL.
+        first_url = fetch_text.call_args_list[0].args[0]
+        self.assertIn("bing.com/search", first_url)
+        self.assertEqual(result["source"], "bing-html")
+        self.assertEqual(result["results"][0]["url"], "https://example.net/news")
 
     def test_tool_registry_hides_search_when_disabled(self):
         registry = ToolRegistry(
