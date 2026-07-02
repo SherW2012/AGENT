@@ -7,6 +7,7 @@ import unittest
 import base64
 import uuid
 import zipfile
+import zlib
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -284,6 +285,40 @@ class WebServerTests(unittest.TestCase):
         summary = prompt_attachments[0]["content"]
         self.assertIn("notes/readme.txt", summary)
         self.assertIn("hello from archive", summary)
+
+    def test_pdf_attachment_text_is_extracted_by_background_skill(self):
+        content_stream = zlib.compress(b"BT /F1 12 Tf 72 700 Td (Hello BNCT report) Tj T* (Second line) Tj ET")
+        pdf = b"".join(
+            [
+                b"%PDF-1.4\n",
+                b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n",
+                b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n",
+                b"3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R >> endobj\n",
+                b"4 0 obj << /Length %d /Filter /FlateDecode >> stream\n" % len(content_stream),
+                content_stream,
+                b"\nendstream endobj\n%%EOF\n",
+            ]
+        )
+        encoded = base64.b64encode(pdf).decode("ascii")
+        prompt_attachments, stored = normalize_attachments(
+            [
+                {
+                    "name": "report.pdf",
+                    "type": "application/pdf",
+                    "size": len(encoded),
+                    "originalSize": len(pdf),
+                    "encoding": "base64",
+                    "content": encoded,
+                }
+            ],
+            SkillRegistry(self.root),
+        )
+        self.assertEqual(stored[0]["kind"], "pdf")
+        self.assertEqual(stored[0]["skill"], "pdf-extract")
+        self.assertEqual(stored[0]["pages"], 1)
+        summary = prompt_attachments[0]["content"]
+        self.assertIn("Hello BNCT report", summary)
+        self.assertIn("Second line", summary)
 
     def test_archive_skill_is_background_only(self):
         registry = SkillRegistry(self.root)

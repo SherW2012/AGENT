@@ -11,6 +11,8 @@ const TEXT_ATTACHMENT_PATTERN = /\.(txt|md|json|csv|log|py|js|ts|tsx|html|css|xm
 const DICOM_ATTACHMENT_PATTERN = /\.(dcm|dicom)$/i;
 const ARCHIVE_ATTACHMENT_PATTERN = /\.zip$/i;
 const MAX_ARCHIVE_ATTACHMENT_BYTES = 1_500_000;
+const PDF_ATTACHMENT_PATTERN = /\.pdf$/i;
+const MAX_PDF_ATTACHMENT_BYTES = 1_500_000;
 
 const state = {
   config: null,
@@ -30,6 +32,9 @@ const state = {
   dragDepth: 0,
   selectMode: false,
   selectedSessions: new Set(),
+  // Claude-style follow: keep pinned to the bottom while streaming, but stop
+  // following as soon as the user scrolls up, and resume when they return.
+  stickToBottom: true,
 };
 
 const elements = {
@@ -93,6 +98,8 @@ const elements = {
   sessionSelectAll: document.querySelector("#session-select-all"),
   sessionDeleteSelected: document.querySelector("#session-delete-selected"),
   sessionManageDone: document.querySelector("#session-manage-done"),
+  uiBlocker: document.querySelector("#ui-blocker"),
+  uiBlockerLabel: document.querySelector("#ui-blocker-label"),
   toastStack: document.querySelector("#toast-stack"),
   webSearchInputs: document.querySelectorAll('input[name="web-search-mode"]'),
   webSearchNetworkInputs: document.querySelectorAll('input[name="web-search-network"]'),
@@ -589,6 +596,7 @@ function attachmentKindLabel(item) {
     image: "图片",
     binary: "文件",
     archive: "压缩包",
+    pdf: "PDF",
     pasted: "粘贴文本",
     text: "文本",
   }[item.kind] || "文本";
@@ -823,7 +831,11 @@ function appendAssistantDraft() {
 function setDraftText(text) {
   if (!state.activeDraft) return;
   renderMarkdown(state.activeDraft.content, text);
-  elements.conversation.scrollTo({ top: elements.conversation.scrollHeight, behavior: "smooth" });
+  // Only auto-follow while the user is at the bottom; if they scrolled up to
+  // read something, leave their viewport alone.
+  if (state.stickToBottom) {
+    elements.conversation.scrollTo({ top: elements.conversation.scrollHeight });
+  }
 }
 
 function setActivity(key, label, status = "active", detail = "") {
@@ -995,6 +1007,7 @@ async function deleteSelectedSessions() {
   const ids = state.sessions.filter((session) => state.selectedSessions.has(session.id)).map((session) => session.id);
   if (!ids.length) return;
   if (!window.confirm(`删除选中的 ${ids.length} 个会话？`)) return;
+  setUiBlocked(true, "正在删除会话…");
   try {
     const result = await api("/api/session/delete-batch", {
       method: "POST",
@@ -1007,6 +1020,8 @@ async function deleteSelectedSessions() {
     showToast(`已删除 ${ids.length} 个会话`);
   } catch (error) {
     showToast(error.message, "error");
+  } finally {
+    setUiBlocked(false);
   }
 }
 
@@ -1040,7 +1055,7 @@ function renderConversation(session) {
         id: message.id,
         attachments: message.attachments || [],
         scroll: false,
-        withActions: isAssistant,
+        withActions: isAssistant || message.role === "user",
         retryTask,
       });
     });
@@ -1058,8 +1073,17 @@ async function loadCurrentSession(sessionId = state.currentSessionId) {
   renderConversation(result.session);
 }
 
+function setUiBlocked(blocked, label = "处理中…") {
+  elements.uiBlockerLabel.textContent = label;
+  elements.uiBlocker.classList.toggle("hidden", !blocked);
+}
+
 async function selectSession(sessionId) {
   if (sessionId === state.currentSessionId || state.busy) return;
+  // Switching rebuilds the runtime server-side and re-renders the whole
+  // conversation (markdown + highlighting) client-side, which can take a
+  // moment on long sessions — gray the UI out so it reads as busy, not stuck.
+  setUiBlocked(true, "正在切换会话…");
   try {
     const result = await api("/api/session/select", {
       method: "POST",
@@ -1070,6 +1094,8 @@ async function selectSession(sessionId) {
     await loadSessions();
   } catch (error) {
     showToast(error.message, "error");
+  } finally {
+    setUiBlocked(false);
   }
 }
 
@@ -1088,6 +1114,7 @@ async function setSessionFavorite(sessionId, favorite) {
 
 async function deleteSession(sessionId, title) {
   if (!window.confirm(`删除会话「${title || "未命名会话"}」？`)) return;
+  setUiBlocked(true, "正在删除会话…");
   try {
     const result = await api("/api/session/delete", {
       method: "POST",
@@ -1100,6 +1127,8 @@ async function deleteSession(sessionId, title) {
     showToast("会话已删除");
   } catch (error) {
     showToast(error.message, "error");
+  } finally {
+    setUiBlocked(false);
   }
 }
 
@@ -1108,6 +1137,7 @@ async function newSession() {
     showToast("当前任务仍在执行", "error");
     return;
   }
+  setUiBlocked(true, "正在创建新会话…");
   try {
     const result = await api("/api/sessions", { method: "POST", body: "{}" });
     updateConfig(result.config);
@@ -1116,6 +1146,8 @@ async function newSession() {
     showToast("已开始新会话");
   } catch (error) {
     showToast(error.message, "error");
+  } finally {
+    setUiBlocked(false);
   }
 }
 
@@ -1564,6 +1596,20 @@ async function readAttachment(file) {
       content: arrayBufferToBase64(await file.arrayBuffer()),
     };
   }
+  if (PDF_ATTACHMENT_PATTERN.test(name) || file.type === "application/pdf") {
+    if (file.size > MAX_PDF_ATTACHMENT_BYTES) {
+      throw new Error(`PDF 附件超过 ${Math.round(MAX_PDF_ATTACHMENT_BYTES / 1024)} KB`);
+    }
+    return {
+      name,
+      type: file.type || "application/pdf",
+      size: file.size,
+      originalSize: file.size,
+      encoding: "base64",
+      kind: "pdf",
+      content: arrayBufferToBase64(await file.arrayBuffer()),
+    };
+  }
   if (ARCHIVE_ATTACHMENT_PATTERN.test(name) || ["application/zip", "application/x-zip-compressed"].includes(file.type)) {
     if (file.size > MAX_ARCHIVE_ATTACHMENT_BYTES) {
       throw new Error(`压缩包附件超过 ${Math.round(MAX_ARCHIVE_ATTACHMENT_BYTES / 1024)} KB`);
@@ -1619,7 +1665,8 @@ async function sendTask(prefilled = null) {
   resizePrompt();
   // Remember the submission so a Stop can restore it for editing and resending.
   state.lastSubmission = { typed: typedTask, prefilled, attachments };
-  appendMessage("user", task, { attachments: attachmentMetadata });
+  state.stickToBottom = true;
+  appendMessage("user", task, { attachments: attachmentMetadata, withActions: true });
   appendAssistantDraft();
   if (state.activeDraft) state.activeDraft.task = task;
   state.abortController = new AbortController();
@@ -1869,6 +1916,7 @@ async function switchWorkspaceFolder() {
   }
   if (!state.config) return;
   elements.workspaceSwitch.disabled = true;
+  setUiBlocked(true, "正在切换工作目录…");
   try {
     const picked = await api("/api/pick-folder", {
       method: "POST",
@@ -1897,6 +1945,7 @@ async function switchWorkspaceFolder() {
     showToast(error.message, "error");
   } finally {
     elements.workspaceSwitch.disabled = false;
+    setUiBlocked(false);
   }
 }
 
@@ -1989,6 +2038,10 @@ function bindEvents() {
   });
   elements.prompt.addEventListener("input", resizePrompt);
   elements.prompt.addEventListener("paste", handlePromptPaste);
+  elements.conversation.addEventListener("scroll", () => {
+    const el = elements.conversation;
+    state.stickToBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+  });
   bindDragAndDrop();
   elements.prompt.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
