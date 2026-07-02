@@ -2,6 +2,7 @@
 name: verify
 description: Verify that a change works end-to-end through tests, browser checks, API health checks, or focused manual inspection. Use after code changes, UI changes, bug fixes, or skill imports.
 version: 0.1.0
+interaction: direct
 display_name: "Verify"
 short_description: "用测试、接口和界面检查确认改动有效。"
 default_prompt: "使用 verify skill 验证当前改动：运行相关测试，检查本地 Web 服务健康状态，并说明还剩哪些风险。"

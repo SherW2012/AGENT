@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .audit import AuditLogger, sha256_text
+from .build_tools import analyze_build_log, configure_build_profile, get_build_profiles, run_build
+from .config import user_data_dir
 from .memory import append_agent_memory, read_agent_memory
 from .project_tools import (
     list_project_files,
@@ -70,11 +72,13 @@ class ToolRegistry:
         skill_registry: SkillRegistry | None = None,
         web_search_mode: str = "auto",
         web_search_network: str = "auto",
+        data_dir: Path | None = None,
     ):
         self.root = root
         self.policy = policy
         self.audit = audit
         self.event_callback = event_callback
+        self.data_dir = data_dir if data_dir is not None else user_data_dir()
         self.skill_registry = skill_registry or SkillRegistry(root)
         self.web_search_mode = web_search_mode
         self.web_search_network = web_search_network
@@ -262,6 +266,50 @@ class ToolRegistry:
                 },
                 Risk.WRITE,
                 lambda root, path, sheets: create_excel(root, path, sheets),
+            ),
+            Tool(
+                "get_build_profiles",
+                "List the user's configured build profiles (debug/release/...) and whether their scripts still "
+                "exist. Call this before run_build; if the needed profile is missing, ask the user for the full "
+                "path of their build script and call configure_build_profile.",
+                {**object_schema, "properties": {}, "required": []},
+                Risk.READ,
+                lambda root: get_build_profiles(root, self.data_dir),
+            ),
+            Tool(
+                "configure_build_profile",
+                "Register or update a named build profile (e.g. debug, release) pointing at a build script "
+                "(.bat/.cmd/.sh/.ps1) whose absolute path the USER provided. Never guess or invent the path -- "
+                "it differs per machine. Stored in the per-user data dir, independent of the workspace.",
+                {
+                    **object_schema,
+                    "properties": {
+                        "profile": {"type": "string"},
+                        "script_path": {"type": "string"},
+                    },
+                    "required": ["profile", "script_path"],
+                },
+                Risk.WRITE,
+                lambda root, profile, script_path: configure_build_profile(root, self.data_dir, profile, script_path),
+            ),
+            Tool(
+                "run_build",
+                "Run a previously configured build profile's script and capture its log. Only human-registered "
+                "scripts can run; arbitrary commands are not accepted. Returns exit code, duration, warning "
+                "count, deterministically extracted error diagnostics (file/line/code/message), the saved log "
+                "path and the log tail. After a failure, explain the first real errors and estimate where in "
+                "the project they originate.",
+                {**object_schema, "properties": {"profile": {"type": "string"}}, "required": ["profile"]},
+                Risk.EXECUTE,
+                lambda root, profile: run_build(root, self.data_dir, profile),
+            ),
+            Tool(
+                "analyze_build_log",
+                "Extract error diagnostics from an existing build log file (workspace-relative or absolute "
+                "path) without running anything. Use for post-mortem analysis of a build that already ran.",
+                {**object_schema, "properties": {"path": {"type": "string"}}, "required": ["path"]},
+                Risk.READ,
+                analyze_build_log,
             ),
         ]
         if self.web_search_mode != "off":

@@ -790,6 +790,10 @@ function toolDisplayName(name) {
     create_word_document: "生成 Word 文档",
     create_powerpoint: "生成 PPT",
     create_excel: "生成 Excel",
+    get_build_profiles: "读取编译配置",
+    configure_build_profile: "保存编译配置",
+    run_build: "运行编译",
+    analyze_build_log: "分析编译日志",
     read_agent_memory: "读取记忆",
     append_agent_memory: "写入记忆",
   };
@@ -1196,6 +1200,16 @@ function skillInitial(skill) {
 function stageSkillPrompt(skill) {
   const displayName = skill.displayName || skill.name || "skill";
   const defaultPrompt = skill.defaultPrompt || `请读取并使用 ${skill.name} skill。`;
+  if (skill.interaction === "direct") {
+    // Fixed-action skill: the default prompt is complete, nothing to fill in.
+    // Stage it ready to send -- one Enter runs it (execution still goes through
+    // the normal approval flow).
+    elements.prompt.value = defaultPrompt;
+    resizePrompt();
+    elements.prompt.focus();
+    showToast(`已填入 ${displayName} 指令，按 Enter 直接执行。`);
+    return;
+  }
   const scaffold = [
     `使用 ${displayName} skill。`,
     "",
@@ -1231,7 +1245,7 @@ function buildSkillRow(skill, index) {
   const copy = document.createElement("span");
   copy.className = "skill-copy";
   const title = document.createElement("strong");
-  title.textContent = skill.displayName || skill.name;
+  title.textContent = (skill.displayName || skill.name) + (skill.interaction === "direct" ? " ⚡" : "");
   const subtitle = document.createElement("small");
   subtitle.textContent = skillSubtitle(skill);
   copy.append(title, subtitle);

@@ -109,6 +109,34 @@ Web 右侧 Skill 面板会显示当前已发现的 skill。点击虚线加号可
 - `create-word`：在工作目录生成 `.docx` Word 文档。
 - `create-ppt`：在工作目录生成 `.pptx` 演示文稿。
 - `create-excel`：在工作目录生成 `.xlsx` Excel 表格。
+- `tps-build-debug` ⚡：一键运行用户配置的 Debug 编译脚本，失败时提取关键错误并预估源码位置。
+- `tps-build-release` ⚡：一键运行 Release 编译脚本，检查成败并提示发布风险。
+- `tps-build-diagnose`：分析已有编译日志，聚类错误、排序根因、给出定位建议（不执行任何命令）。
+
+### Skill 交互分类
+
+Skill 分四类交互方式，`SKILL.md` frontmatter 用 `interaction` 与 `visibility` 声明：
+
+| 类别 | 行为 | 例子 |
+|---|---|---|
+| `direct` ⚡ | 点击即填入完整指令，回车直接执行 | `run`、`verify`、`tps-build-debug/release` |
+| `guided`（默认） | 点击填入说明模板，需补充目标后发送 | `code-review`、`debug`、`create-word/ppt/excel` |
+| 附件驱动 | 上传匹配类型的附件自动触发 | `dicom-tags` |
+| `background` | 不显示在面板，需要时自动使用 | `web-search`、`archive-extract`、`pdf-extract` |
+
+导入的第三方 skill 默认按 `guided` 处理；若其 frontmatter 声明了 `interaction: direct`
+或附件处理器字段，则按对应类别工作。
+
+### TPS 编译 Skill 的配置
+
+编译脚本路径因机器而异，**绝不写死在代码里**。首次让 Agent 编译时，它会调用
+`get_build_profiles` 发现没有配置，向你要脚本的完整路径（例如
+`D:\...\vs2019_win64.bat`），经你批准后保存到用户数据目录
+`~/.bnct_agent/build-profiles.json`。之后每次编译只需一次审批即可执行。
+`run_build` 只能运行人工登记过的脚本，模型不能构造任意命令；输出按 UTF-8→GBK
+兜底解码避免中文日志乱码，完整日志存到 `~/.bnct_agent/build-logs/`，同时返回
+确定性提取的错误诊断（文件/行/错误码/信息）供模型定位根因。超时默认 30 分钟，
+可用 `BNCT_AGENT_BUILD_TIMEOUT` 调整。
 
 `archive-extract` 是一个**后台 skill**（不显示在面板里，类似 `web-search`）：上传 `.zip` 时自动在内存里解析压缩包，列出文件并预览文本成员，全程只读、不落盘，并对条目数、单文件读取量和总预览量做上限以抵御 zip 炸弹。
 

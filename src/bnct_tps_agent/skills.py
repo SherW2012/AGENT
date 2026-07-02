@@ -57,6 +57,13 @@ class Skill:
         value = str(self.metadata.get("visibility") or "panel").strip().lower()
         return value if value in {"panel", "background"} else "panel"
 
+    @property
+    def interaction(self) -> str:
+        """How clicking the skill behaves: "direct" fills a ready-to-send prompt
+        (fixed actions like builds), "guided" asks the user to add a target."""
+        value = str(self.metadata.get("interaction") or "guided").strip().lower()
+        return value if value in {"direct", "guided"} else "guided"
+
 
 def _parse_scalar(value: str) -> Any:
     value = value.strip()
@@ -192,6 +199,7 @@ class SkillRegistry:
                     "path": self._display_path(skill.path),
                     "removable": self.is_removable(skill),
                     "favorite": skill.name in favorites,
+                    "interaction": skill.interaction,
                     "trusted": skill.trusted,
                     "visibility": skill.visibility,
                     "hasProcessor": bool(skill.processor),

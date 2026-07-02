@@ -301,6 +301,7 @@ class ApplicationState:
                 skill_registry=self.skill_registry,
                 web_search_mode=self.settings.web_search_mode,
                 web_search_network=self.settings.web_search_network,
+                data_dir=self.data_dir,
             )
             self.runtime = None
             if self.settings.api_key:
