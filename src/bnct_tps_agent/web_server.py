@@ -167,6 +167,7 @@ def normalize_attachments(raw: Any, skill_registry: SkillRegistry | None = None)
     for item in raw:
         if not isinstance(item, dict):
             raise ValueError("附件必须是对象")
+        image_data_url: str | None = None
         name = str(item.get("name") or "attachment").strip()[:160]
         media_type = str(item.get("type") or "text/plain").strip()[:100]
         size = int(item.get("size") or 0)
@@ -200,10 +201,18 @@ def normalize_attachments(raw: Any, skill_registry: SkillRegistry | None = None)
                     "skill": processed.get("skill"),
                     **dict(processed.get("stored") or {}),
                 }
+            elif media_type.startswith("image/"):
+                # Real image bytes ride along as a data URL; the agent runtime
+                # attaches them as multimodal content blocks when the provider
+                # can accept images (natively or via its vision model).
+                kind = "image"
+                image_data_url = f"data:{media_type};base64,{base64.b64encode(binary).decode('ascii')}"
+                content = f"图片附件 `{name}`（{media_type}，{original_size} bytes）已随本条消息以图像形式提供。"
+                extra = {"kind": kind, "uploadedBytes": len(binary), "originalSize": original_size}
             else:
-                kind = "image" if media_type.startswith("image/") else "binary"
+                kind = "binary"
                 content = (
-                    f"{'图像' if kind == 'image' else '二进制'}附件 `{name}` 未作为可解析文本发送给模型。\n"
+                    f"二进制附件 `{name}` 未作为可解析文本发送给模型。\n"
                     f"- MIME: {media_type}\n"
                     f"- 文件大小: {original_size} bytes\n"
                     f"- 上传片段: {len(binary)} bytes\n"
@@ -226,6 +235,7 @@ def normalize_attachments(raw: Any, skill_registry: SkillRegistry | None = None)
                 "size": size,
                 "content": content,
                 "kind": kind,
+                "imageData": image_data_url,
             }
         )
         stored.append({
@@ -522,9 +532,10 @@ class ApplicationState:
             prompt_attachments, stored_attachments = normalize_attachments(attachments, self.skill_registry)
             history = self.sessions.recent_context(self.current_session_id)
             effective_task = build_task_prompt(task, history, prompt_attachments)
+            images = [item["imageData"] for item in prompt_attachments if item.get("imageData")]
             self.sessions.add_message(self.current_session_id, "user", task, stored_attachments)
             self.add_event({"type": "agent_started"})
-            answer = self.runtime.run(effective_task)
+            answer = self.runtime.run(effective_task, images=images)
             self.sessions.add_message(self.current_session_id, "assistant", answer)
             self.add_event({"type": "agent_finished"})
             return {"answer": answer, "session": self.sessions.get(self.current_session_id)}
@@ -551,6 +562,7 @@ class ApplicationState:
             prompt_attachments, stored_attachments = normalize_attachments(attachments, self.skill_registry)
             history = self.sessions.recent_context(self.current_session_id)
             effective_task = build_task_prompt(task, history, prompt_attachments)
+            images = [item["imageData"] for item in prompt_attachments if item.get("imageData")]
             self.sessions.add_message(self.current_session_id, "user", task, stored_attachments)
             self._interrupt.clear()
             with self._state_lock:
@@ -562,6 +574,7 @@ class ApplicationState:
                 effective_task,
                 should_continue=lambda: not self._interrupt.is_set(),
                 pop_steering=self._pop_steering,
+                images=images,
             ):
                 event_type = str(event.get("type") or "")
                 if event_type == "delta":

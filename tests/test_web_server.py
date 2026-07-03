@@ -347,7 +347,9 @@ class WebServerTests(unittest.TestCase):
             SkillRegistry(self.root),
         )
         self.assertEqual(stored[0]["kind"], "image")
-        self.assertIn("图像附件 `screen.png`", prompt_attachments[0]["content"])
+        self.assertIn("图片附件 `screen.png`", prompt_attachments[0]["content"])
+        # The real bytes ride along as a data URL for multimodal providers.
+        self.assertTrue(str(prompt_attachments[0]["imageData"]).startswith("data:image/png;base64,"))
 
     def test_skill_registry_loads_and_reads_dicom_skill(self):
         registry = SkillRegistry(self.root)

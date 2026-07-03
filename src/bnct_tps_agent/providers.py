@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 
@@ -15,6 +16,20 @@ class ProviderProfile:
     key_url: str
     docs_url: str
     key_hint: str
+    # Vision capability, a config fact like base_url (not intent guessing):
+    #   "native" - the configured chat model already accepts images
+    #   "switch" - same API key, but image turns must route to vision_model
+    #   "none"   - the provider's chat API is text-only
+    vision: str = "none"
+    vision_model: str | None = None
+
+    def resolve_vision_model(self) -> str | None:
+        """Vision model for image turns; env var overrides the profile default
+        so new provider models don't require a code change."""
+        override = os.getenv(f"{self.id.upper()}_VISION_MODEL") or os.getenv(
+            f"BNCT_AGENT_{self.id.upper()}_VISION_MODEL"
+        )
+        return (override or self.vision_model or "").strip() or None
 
     def public_config(self) -> dict[str, object]:
         return {
@@ -27,6 +42,8 @@ class ProviderProfile:
             "docsUrl": self.docs_url,
             "keyEnv": self.key_env,
             "keyHint": self.key_hint,
+            "vision": self.vision,
+            "visionModel": self.resolve_vision_model() or "",
         }
 
 
@@ -42,6 +59,7 @@ PROVIDERS: dict[str, ProviderProfile] = {
         key_url="https://platform.openai.com/api-keys",
         docs_url="https://developers.openai.com/api/docs/quickstart",
         key_hint="sk-...",
+        vision="native",
     ),
     "deepseek": ProviderProfile(
         id="deepseek",
@@ -66,6 +84,8 @@ PROVIDERS: dict[str, ProviderProfile] = {
         key_url="https://platform.kimi.com/console/account",
         docs_url="https://platform.kimi.com/docs/api/quickstart",
         key_hint="Kimi API Key",
+        vision="switch",
+        vision_model="moonshot-v1-32k-vision-preview",
     ),
 }
 

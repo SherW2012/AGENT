@@ -157,6 +157,50 @@ class AgentRuntime:
             + memory_context
         )
 
+    def _user_message(self, prompt: str, images: list[str] | None) -> dict[str, Any]:
+        """Build the user message; image turns become multimodal content blocks
+        (OpenAI-compatible image_url format, which Kimi's vision models accept)."""
+        clean_images = [str(u) for u in (images or []) if str(u).startswith("data:image/")]
+        if not clean_images:
+            return {"role": "user", "content": prompt}
+        if self.profile.vision == "none":
+            # Text-only provider: never send blocks it cannot parse; state the
+            # limitation in-band so the model explains it instead of guessing.
+            note = (
+                f"\n\n（注意：本条消息附带了 {len(clean_images)} 张图片，但 {self.profile.label} "
+                "的对话接口不支持图片输入，图片内容未发送。请如实告知用户，并建议切换到支持识图的供应商，例如 Kimi。）"
+            )
+            return {"role": "user", "content": prompt + note}
+        content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        content.extend({"type": "image_url", "image_url": {"url": url}} for url in clean_images)
+        return {"role": "user", "content": content}
+
+    def _messages_have_images(self) -> bool:
+        return any(
+            isinstance(message.get("content"), list)
+            and any(part.get("type") == "image_url" for part in message["content"] if isinstance(part, dict))
+            for message in self.messages
+        )
+
+    def _chat_model(self) -> str:
+        """Route image-bearing conversations to the provider's vision model
+        automatically (same API key); pure-text conversations keep the user's
+        configured model."""
+        if self.profile.vision == "switch" and self._messages_have_images():
+            return self.profile.resolve_vision_model() or self.settings.model
+        return self.settings.model
+
+    def _strip_image_blocks(self) -> None:
+        for index, message in enumerate(self.messages):
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            texts = [part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"]
+            self.messages[index] = {
+                **message,
+                "content": "\n".join(texts) + "\n\n[图片已省略：视觉模型调用失败，本轮退回纯文本模型]",
+            }
+
     def reset_conversation(self) -> None:
         """Start a fresh conversation without rebuilding the runtime.
 
@@ -167,7 +211,7 @@ class AgentRuntime:
         self.previous_response_id = None
         self.messages = [{"role": "system", "content": self.instructions}]
 
-    def run(self, prompt: str) -> str:
+    def run(self, prompt: str, images: list[str] | None = None) -> str:
         if not prompt.strip():
             raise ValueError("任务不能为空")
         ensure_prompt_is_deidentified(prompt)
@@ -179,14 +223,15 @@ class AgentRuntime:
             prompt_chars=len(prompt),
         )
         if self.profile.transport == "responses":
-            return self._run_responses(prompt)
-        return self._run_chat_completions(prompt)
+            return self._run_responses(prompt, images=images)
+        return self._run_chat_completions(prompt, images=images)
 
     def run_events(
         self,
         prompt: str,
         should_continue: "Callable[[], bool] | None" = None,
         pop_steering: "Callable[[], list[str]] | None" = None,
+        images: list[str] | None = None,
     ) -> Iterator[dict[str, Any]]:
         if not prompt.strip():
             raise ValueError("任务不能为空")
@@ -204,18 +249,33 @@ class AgentRuntime:
             # OpenAI-compatible Chat Completions providers. Keep OpenAI correct
             # by falling back to the existing path while still using the same UI
             # stream envelope.
-            text = self._run_responses(prompt, should_continue=should_continue)
+            text = self._run_responses(prompt, should_continue=should_continue, images=images)
             yield {"type": "delta", "text": text}
             yield {"type": "done", "answer": text}
             return
-        text = yield from self._run_chat_completions_events(prompt, should_continue, pop_steering)
+        text = yield from self._run_chat_completions_events(prompt, should_continue, pop_steering, images)
         yield {"type": "done", "answer": text}
 
-    def _run_responses(self, prompt: str, should_continue: Callable[[], bool] | None = None) -> str:
+    def _run_responses(
+        self,
+        prompt: str,
+        should_continue: Callable[[], bool] | None = None,
+        images: list[str] | None = None,
+    ) -> str:
+        clean_images = [str(u) for u in (images or []) if str(u).startswith("data:image/")]
+        request_input: Any = prompt
+        if clean_images:
+            request_input = [{
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": prompt},
+                    *({"type": "input_image", "image_url": url} for url in clean_images),
+                ],
+            }]
         request: dict[str, Any] = dict(
             model=self.settings.model,
             instructions=self.instructions,
-            input=prompt,
+            input=request_input,
             tools=self.registry.schemas,
         )
         if self.previous_response_id:
@@ -262,11 +322,11 @@ class AgentRuntime:
         self.audit.record("request_stopped", reason="max_steps", max_steps=self.settings.max_steps)
         raise RuntimeError("超过最大工具调用轮数，已停止以避免失控循环")
 
-    def _run_chat_completions(self, prompt: str) -> str:
-        self.messages.append({"role": "user", "content": prompt})
+    def _run_chat_completions(self, prompt: str, images: list[str] | None = None) -> str:
+        self.messages.append(self._user_message(prompt, images))
         for step in range(self.settings.max_steps):
             completion = self.client.chat.completions.create(
-                model=self.settings.model,
+                model=self._chat_model(),
                 messages=list(self.messages),
                 tools=self.registry.chat_schemas,
             )
@@ -316,10 +376,12 @@ class AgentRuntime:
         prompt: str,
         should_continue: Callable[[], bool] | None = None,
         pop_steering: Callable[[], list[str]] | None = None,
+        images: list[str] | None = None,
     ) -> Iterator[dict[str, Any]]:
         alive = should_continue if should_continue is not None else (lambda: True)
         drain_steering = pop_steering if pop_steering is not None else (lambda: [])
-        self.messages.append({"role": "user", "content": prompt})
+        vision_fallback_used = False
+        self.messages.append(self._user_message(prompt, images))
         # Separate consecutive reasoning rounds (each round = some thinking text
         # followed by tool calls) with a blank line in the streamed output, so the
         # rounds don't pile into one paragraph. A single-pass answer is unaffected.
@@ -334,7 +396,7 @@ class AgentRuntime:
                 self.messages.append({"role": "user", "content": f"[用户在任务执行中补充的指导，请立即结合执行]\n{note}"})
             try:
                 completion_stream = self.client.chat.completions.create(
-                    model=self.settings.model,
+                    model=self._chat_model(),
                     messages=list(self.messages),
                     tools=self.registry.chat_schemas,
                     stream=True,
@@ -344,6 +406,21 @@ class AgentRuntime:
                 text = self._run_chat_completions(prompt)
                 yield {"type": "delta", "text": text}
                 return text
+            except Exception:
+                # Vision fallback: if an image-bearing request is rejected (e.g.
+                # the vision model name is unavailable on this account), strip
+                # the image blocks once and retry on the configured text model
+                # instead of failing the whole turn.
+                if self._messages_have_images() and not vision_fallback_used:
+                    vision_fallback_used = True
+                    self._strip_image_blocks()
+                    self.audit.record("vision_fallback", model=self.settings.model)
+                    yield {
+                        "type": "notice",
+                        "message": "视觉模型调用失败，图片已省略，本轮退回纯文本模型继续。",
+                    }
+                    continue
+                raise
 
             response_id = ""
             content_parts: list[str] = []

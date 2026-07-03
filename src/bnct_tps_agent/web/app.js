@@ -286,7 +286,12 @@ function syncProviderFields(providerId, resetValues) {
     return option;
   }));
   elements.providerHelpTitle.textContent = `${provider.label} 使用独立的 API Key`;
-  elements.providerHelpText.textContent = `请在 ${provider.label} 官方平台创建密钥。环境变量名为 ${provider.keyEnv}，密钥仅保存在本次本机进程内。`;
+  const visionNote = provider.vision === "native"
+    ? "✅ 该系列模型原生支持图片识别，截图可直接发送。"
+    : provider.vision === "switch"
+      ? `✅ 支持图片识别：包含图片的消息会自动切换到视觉模型 ${provider.visionModel}（同一 API Key，无需手动切换）。`
+      : "⚠️ 该供应商的对话接口不支持图片识别，发送的图片无法被读取。";
+  elements.providerHelpText.textContent = `请在 ${provider.label} 官方平台创建密钥。环境变量名为 ${provider.keyEnv}，密钥仅保存在本次本机进程内。${visionNote}`;
   elements.providerKeyLink.href = provider.keyUrl;
   elements.providerDocsLink.href = provider.docsUrl;
   elements.apiKey.placeholder = `${provider.keyHint}（可留空以沿用本次配置）`;
@@ -1564,16 +1569,24 @@ async function addAttachments(files) {
     showToast(`一次最多上传 ${MAX_ATTACHMENTS} 个附件`, "error");
     return;
   }
+  let addedImage = false;
   for (const file of selected) {
     try {
       const attachment = await readAttachment(file);
       state.pendingAttachments.push(attachment);
+      if (attachment.kind === "image") addedImage = true;
     } catch (_error) {
       showToast(`${file.name} 无法读取：${_error.message}`, "error");
     }
   }
   elements.attachmentInput.value = "";
   renderPendingAttachments();
+  if (addedImage) {
+    const provider = providerConfig(state.config?.provider);
+    if (provider && provider.vision === "none") {
+      showToast(`${provider.label} 的对话接口不支持图片识别，建议在设置中切换到支持识图的供应商（如 Kimi）。`, "error");
+    }
+  }
 }
 
 function isDicomFile(file) {
@@ -1731,6 +1744,9 @@ async function sendTask(prefilled = null) {
         if (event.type === "delta") {
           answerText += event.text || "";
           setDraftText(answerText);
+        } else if (event.type === "notice") {
+          showToast(event.message || "任务提示", "error");
+          setActivity("notice", event.message || "任务提示", "failed");
         } else if (event.type === "done") {
           completed = true;
           const stopped = Boolean(event.stopped) || state.stopped;

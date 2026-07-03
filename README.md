@@ -178,6 +178,21 @@ SKILL.md 并调用 `create_agent_skill`（写入类，需审批）。新 skill �
 
 会话历史和导入的 skill 保存在与工作目录**无关**的用户级数据目录（默认 `~/.bnct_agent`，可用环境变量 `BNCT_AGENT_DATA_DIR` 覆盖）。因此切换工作目录不会丢失会话或已导入的 skill。项目内置 skill 仍随各自仓库的 `skills/` 目录走。右侧 Skill 面板对可移除的本地 skill 提供删除按钮；项目内置 skill 需在代码仓库中处理。
 
+## 图片识别（识图）
+
+识图能力属于**大模型**，Agent 只负责把图片按 API 格式传给模型（与 Claude Code 的做法一致，
+没有独立的 OCR 工具）。各供应商的能力是配置事实，写在 provider 档案里：
+
+| 供应商 | 识图 | 行为 |
+|---|---|---|
+| OpenAI | `native` | 配置的模型本身接受图片，直接发送 |
+| Kimi / Moonshot | `switch` | **同一 API Key**，含图片的对话自动路由到视觉模型（默认 `moonshot-v1-32k-vision-preview`，可用 `KIMI_VISION_MODEL` 覆盖），用户无需手动切换 |
+| DeepSeek | `none` | 对话接口纯文本；图片不发送，改为向模型注明限制，由它如实告知用户 |
+
+设置页的供应商说明会显示各家的识图能力；在纯文本供应商下添加图片附件时会立即
+弹提示。若视觉模型调用失败（如账号无权限），该轮自动剥离图片退回所配置的文本
+模型继续，并在界面提示，不会让整个任务失败。
+
 ## 关于 VPN / 网络
 
 和模型对话本身只访问所选供应商的 API 域名：DeepSeek、Kimi/Moonshot 在中国大陆通常无需 VPN；OpenAI 一般需要。换言之，不用 VPN 时，把供应商切到 DeepSeek 或 Kimi 即可正常对话。联网搜索默认走 Bing，同样无需 VPN；若本机配置了代理（如对话用的 VPN 代理）导致搜索异常，可在设置页把“网络通道”切到 `Direct` 绕过本机代理。

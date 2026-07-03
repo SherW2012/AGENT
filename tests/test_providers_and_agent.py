@@ -90,6 +90,89 @@ class ProviderAndAgentTests(unittest.TestCase):
         self.assertEqual(get_provider("deepseek").transport, "chat_completions")
         self.assertEqual(get_provider("kimi").base_url, "https://api.moonshot.cn/v1")
 
+    def test_provider_vision_capabilities(self):
+        self.assertEqual(get_provider("openai").vision, "native")
+        self.assertEqual(get_provider("deepseek").vision, "none")
+        kimi = get_provider("kimi")
+        self.assertEqual(kimi.vision, "switch")
+        self.assertTrue(kimi.resolve_vision_model())
+        with patch.dict("os.environ", {"KIMI_VISION_MODEL": "custom-vision"}, clear=False):
+            self.assertEqual(kimi.resolve_vision_model(), "custom-vision")
+
+    def test_image_turns_route_to_the_vision_model(self):
+        chunks = [
+            SimpleNamespace(id="r", choices=[SimpleNamespace(delta=SimpleNamespace(content="图里写着测试"), finish_reason="stop")]),
+        ]
+        completions = FakeStreamingCompletions([chunks])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        registry = FakeRegistry()
+        settings = Settings.load(self.root, provider="kimi", api_key="test-key")
+        audit = AuditLogger(self.root / "tests" / "runtime_output" / "vision-audit")
+
+        image = "data:image/png;base64,aGVsbG8="
+        events = list(AgentRuntime(settings, registry, audit, client=client).run_events("图里写了什么", images=[image]))
+
+        self.assertEqual(events[-1]["answer"], "图里写着测试")
+        request = completions.requests[0]
+        # Same API key, but the request auto-routes to the provider's vision model.
+        self.assertEqual(request["model"], "moonshot-v1-32k-vision-preview")
+        user_message = request["messages"][-1]
+        self.assertIsInstance(user_message["content"], list)
+        kinds = {part["type"] for part in user_message["content"]}
+        self.assertEqual(kinds, {"text", "image_url"})
+
+    def test_text_only_provider_gets_note_instead_of_image_blocks(self):
+        chunks = [
+            SimpleNamespace(id="r", choices=[SimpleNamespace(delta=SimpleNamespace(content="收到"), finish_reason="stop")]),
+        ]
+        completions = FakeStreamingCompletions([chunks])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        registry = FakeRegistry()
+        settings = Settings.load(self.root, provider="deepseek", api_key="test-key")
+        audit = AuditLogger(self.root / "tests" / "runtime_output" / "vision-none-audit")
+
+        list(AgentRuntime(settings, registry, audit, client=client).run_events(
+            "图里写了什么", images=["data:image/png;base64,aGVsbG8="]
+        ))
+        request = completions.requests[0]
+        self.assertEqual(request["model"], "deepseek-v4-pro")
+        user_message = request["messages"][-1]
+        self.assertIsInstance(user_message["content"], str)
+        self.assertIn("不支持图片输入", user_message["content"])
+
+    def test_vision_failure_falls_back_to_text_model_with_notice(self):
+        class FlakyCompletions:
+            def __init__(self, chunks):
+                self.chunks = chunks
+                self.requests = []
+                self.calls = 0
+
+            def create(self, **request):
+                self.requests.append(request)
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("model not found: vision")
+                return iter(self.chunks)
+
+        chunks = [
+            SimpleNamespace(id="r", choices=[SimpleNamespace(delta=SimpleNamespace(content="退回文本模型"), finish_reason="stop")]),
+        ]
+        completions = FlakyCompletions(chunks)
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        registry = FakeRegistry()
+        settings = Settings.load(self.root, provider="kimi", api_key="test-key")
+        audit = AuditLogger(self.root / "tests" / "runtime_output" / "vision-fallback-audit")
+
+        events = list(AgentRuntime(settings, registry, audit, client=client).run_events(
+            "图里写了什么", images=["data:image/png;base64,aGVsbG8="]
+        ))
+        notices = [event for event in events if event["type"] == "notice"]
+        self.assertTrue(notices)
+        self.assertEqual(events[-1]["answer"], "退回文本模型")
+        # Retry dropped the image blocks and returned to the configured model.
+        self.assertEqual(completions.requests[1]["model"], "kimi-k2.6")
+        self.assertIsInstance(completions.requests[1]["messages"][-1]["content"], str)
+
     def test_chat_provider_executes_tool_call_then_returns_text(self):
         tool_call = SimpleNamespace(
             id="call-1",
