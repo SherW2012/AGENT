@@ -26,6 +26,7 @@ PROFILE_FILE = "build-profiles.json"
 ALLOWED_SCRIPT_SUFFIXES = {".bat", ".cmd", ".sh", ".ps1"}
 PROFILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 DEFAULT_TIMEOUT_SECONDS = 1800
+DEFAULT_LOG_KEEP = 10  # per profile; override with BNCT_AGENT_BUILD_LOG_KEEP
 MAX_LOG_BYTES = 8_000_000
 MAX_TAIL_CHARS = 6_000
 MAX_ERRORS = 40
@@ -149,6 +150,22 @@ def configure_build_profile(_root: Path, data_dir: Path, profile: str, script_pa
     }
 
 
+def _prune_old_logs(logs_dir: Path, profile: str, keep: Path) -> None:
+    """Retain only the newest N logs per profile so long-term use can't bloat
+    the data dir. The just-written log is always kept."""
+    try:
+        limit = max(1, int(os.getenv("BNCT_AGENT_BUILD_LOG_KEEP", str(DEFAULT_LOG_KEEP))))
+    except ValueError:
+        limit = DEFAULT_LOG_KEEP
+    logs = sorted(logs_dir.glob(f"{profile}-*.log"), key=lambda p: p.name, reverse=True)
+    for stale in logs[limit:]:
+        if stale != keep:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+
+
 def _build_command(script: Path) -> list[str]:
     suffix = script.suffix.lower()
     if suffix in {".bat", ".cmd"}:
@@ -191,6 +208,7 @@ def run_build(_root: Path, data_dir: Path, profile: str) -> dict[str, Any]:
     logs_dir.mkdir(parents=True, exist_ok=True)
     log_path = logs_dir / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}.log"
     log_path.write_text(text, encoding="utf-8")
+    _prune_old_logs(logs_dir, name, keep=log_path)
 
     errors = extract_build_errors(text)
     warnings = len(_WARNING_RE.findall(text))

@@ -2,6 +2,7 @@
 name: debug
 description: Investigate failures, exceptions, broken UI flows, failed tests, or confusing runtime behavior. Use when the user reports something is broken, stuck, failing, or inconsistent.
 version: 0.1.0
+icon: "🐞"
 display_name: "Debug"
 short_description: "定位失败原因，给出最小修复路径。"
 default_prompt: "使用 debug skill 分析当前失败现象，先定位最可能的原因，再给出可验证的最小修复方案。"

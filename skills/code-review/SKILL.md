@@ -2,6 +2,7 @@
 name: code-review
 description: Review code changes or selected project files for bugs, safety issues, regressions, and missing tests. Use when the user asks for code review, risk review, implementation critique, or pre-merge inspection.
 version: 0.1.0
+icon: "🔍"
 display_name: "Code Review"
 short_description: "审查代码风险、回归和缺失测试。"
 default_prompt: "使用 code-review skill 审查当前工程最近的代码改动，优先指出 bug、回归风险和缺失测试。"

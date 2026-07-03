@@ -92,6 +92,18 @@ class BuildToolsTests(unittest.TestCase):
         self.assertEqual(result["errors"][0]["line"], 245)
         self.assertTrue(Path(result["logPath"]).is_file())
 
+    def test_old_build_logs_are_pruned(self):
+        script = self._make_script("echo ok\nexit 0\n")
+        configure_build_profile(self.root, self.data_dir, "debug", str(script))
+        logs_dir = self.data_dir / "build-logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        for index in range(15):
+            (logs_dir / f"debug-20200101-{index:06d}.log").write_text("old", encoding="utf-8")
+        result = run_build(self.root, self.data_dir, "debug")
+        remaining = sorted(logs_dir.glob("debug-*.log"))
+        self.assertLessEqual(len(remaining), 10)
+        self.assertIn(Path(result["logPath"]), remaining)
+
     def test_run_build_requires_configuration_first(self):
         with self.assertRaises(ValueError):
             run_build(self.root, self.data_dir, "release")

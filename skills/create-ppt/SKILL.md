@@ -2,6 +2,7 @@
 name: create-ppt
 description: Generate a PowerPoint (.pptx) deck in the workspace from a list of slides with titles and bullet points. Use when the user asks to create, export, or write a PPT, slides, or .pptx file.
 version: 0.1.0
+icon: "📽️"
 display_name: "PPT 演示文稿"
 short_description: "生成 .pptx 演示文稿。"
 default_prompt: "使用 create-ppt skill 生成一份 PPT：先确认文件名和每页的标题与要点，再写入工作目录。"

@@ -127,6 +127,10 @@ Skill 分四类交互方式，`SKILL.md` frontmatter 用 `interaction` 与 `visi
 导入的第三方 skill 默认按 `guided` 处理；若其 frontmatter 声明了 `interaction: direct`
 或附件处理器字段，则按对应类别工作。
 
+**图标**：出厂 skill 在 frontmatter 里用 `icon: "🔍"` 声明默认图标（emoji）；导入的
+skill 也可以在自己的 `SKILL.md` 里声明 `icon` 自定义。未声明时按名称哈希从一组预设
+图标（🧩 ⚙️ 🛠️ 🧪 📐 🗂️ 💡 🔧）中固定分配一个，保证同一 skill 图标稳定。
+
 ### TPS 编译 Skill 的配置
 
 编译脚本路径因机器而异，**绝不写死在代码里**。首次让 Agent 编译时，它会调用
@@ -136,7 +140,8 @@ Skill 分四类交互方式，`SKILL.md` frontmatter 用 `interaction` 与 `visi
 `run_build` 只能运行人工登记过的脚本，模型不能构造任意命令；输出按 UTF-8→GBK
 兜底解码避免中文日志乱码，完整日志存到 `~/.bnct_agent/build-logs/`，同时返回
 确定性提取的错误诊断（文件/行/错误码/信息）供模型定位根因。超时默认 30 分钟，
-可用 `BNCT_AGENT_BUILD_TIMEOUT` 调整。
+可用 `BNCT_AGENT_BUILD_TIMEOUT` 调整。历史日志按档案自动保留最近 10 份
+（`BNCT_AGENT_BUILD_LOG_KEEP` 可调），长期使用不会持续膨胀。
 
 `archive-extract` 是一个**后台 skill**（不显示在面板里，类似 `web-search`）：上传 `.zip` 时自动在内存里解析压缩包，列出文件并预览文本成员，全程只读、不落盘，并对条目数、单文件读取量和总预览量做上限以抵御 zip 炸弹。
 

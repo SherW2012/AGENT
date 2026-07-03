@@ -2,6 +2,7 @@
 name: verify
 description: Verify that a change works end-to-end through tests, browser checks, API health checks, or focused manual inspection. Use after code changes, UI changes, bug fixes, or skill imports.
 version: 0.1.0
+icon: "✅"
 interaction: direct
 display_name: "Verify"
 short_description: "用测试、接口和界面检查确认改动有效。"

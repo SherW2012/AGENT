@@ -2,6 +2,7 @@
 name: create-word
 description: Generate a Word (.docx) document in the workspace from a title and structured paragraphs. Use when the user asks to create, export, or write a Word document, report, or .docx file.
 version: 0.1.0
+icon: "📝"
 display_name: "Word 文档"
 short_description: "生成 .docx Word 文档。"
 default_prompt: "使用 create-word skill 生成一份 Word 文档：先确认文件名、标题和章节要点，再写入工作目录。"

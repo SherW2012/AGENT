@@ -149,6 +149,16 @@ class AgentRuntime:
             + memory_context
         )
 
+    def reset_conversation(self) -> None:
+        """Start a fresh conversation without rebuilding the runtime.
+
+        Switching or creating sessions only needs the model-side message history
+        cleared; the client, tool registry and skill catalog are unchanged, so a
+        full rebuild (skill re-discovery, registry reconstruction) is wasted
+        work that made session switches feel slow."""
+        self.previous_response_id = None
+        self.messages = [{"role": "system", "content": self.instructions}]
+
     def run(self, prompt: str) -> str:
         if not prompt.strip():
             raise ValueError("任务不能为空")

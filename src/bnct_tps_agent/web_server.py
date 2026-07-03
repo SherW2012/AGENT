@@ -31,12 +31,13 @@ from .tool_registry import ToolRegistry
 
 
 WEB_ROOT = Path(__file__).resolve().with_name("web")
-MAX_REQUEST_BYTES = 4_000_000
+MAX_REQUEST_BYTES = 20_000_000  # PDF/zip attachments arrive base64-inflated (~4/3x)
 WEB_TOKEN_FILE = "web-token"
 MAX_ATTACHMENTS = 5
 MAX_ATTACHMENT_CHARS = 180_000
 MAX_TOTAL_ATTACHMENT_CHARS = 700_000
 MAX_BINARY_ATTACHMENT_BYTES = 1_500_000
+MAX_PDF_ATTACHMENT_BYTES = 10_000_000
 
 
 def load_or_create_web_token(root: Path) -> str:
@@ -176,8 +177,10 @@ def normalize_attachments(raw: Any, skill_registry: SkillRegistry | None = None)
                 binary = base64.b64decode(str(item.get("content") or ""), validate=True)
             except (binascii.Error, ValueError) as exc:
                 raise ValueError(f"{name} 不是合法的 base64 附件") from exc
-            if len(binary) > MAX_BINARY_ATTACHMENT_BYTES:
-                raise ValueError(f"{name} 超过二进制附件上限")
+            is_pdf = media_type == "application/pdf" or name.lower().endswith(".pdf")
+            binary_limit = MAX_PDF_ATTACHMENT_BYTES if is_pdf else MAX_BINARY_ATTACHMENT_BYTES
+            if len(binary) > binary_limit:
+                raise ValueError(f"{name} 超过附件上限（{binary_limit // 1_000_000 or 1} MB）")
             processed = None
             if skill_registry is not None:
                 processed = skill_registry.process_attachment(
@@ -409,12 +412,21 @@ class ApplicationState:
         self.add_event({"type": "session_configured", "provider": provider, "model": model})
         return self.config()
 
+    def _reset_conversation_state(self) -> None:
+        """Fast path for session create/select/delete: clear the event feed and
+        the model conversation, but keep the runtime/registry/skills as-is."""
+        with self._state_lock:
+            self._events.clear()
+            self._event_id = 0
+        if self.runtime is not None:
+            self.runtime.reset_conversation()
+
     def new_session(self) -> dict[str, Any]:
         if self._chat_lock.locked():
             raise RuntimeError("当前任务仍在执行")
         session = self.sessions.create("新会话")
         self.current_session_id = str(session["id"])
-        self._rebuild_runtime(clear_events=True)
+        self._reset_conversation_state()
         self.add_event({"type": "session_started"})
         return self.config()
 
@@ -433,7 +445,7 @@ class ApplicationState:
             raise RuntimeError("当前任务仍在执行")
         session = self.sessions.set_current(session_id)
         self.current_session_id = str(session["id"])
-        self._rebuild_runtime(clear_events=True)
+        self._reset_conversation_state()
         self.add_event({"type": "session_selected", "session": self.current_session_id})
         return {"config": self.config(), "session": session}
 
@@ -445,7 +457,7 @@ class ApplicationState:
         if self._chat_lock.locked():
             raise RuntimeError("当前任务仍在执行")
         self.current_session_id = self.sessions.delete(session_id)
-        self._rebuild_runtime(clear_events=True)
+        self._reset_conversation_state()
         self.add_event({"type": "session_deleted", "session": session_id})
         return {"config": self.config(), **self.list_sessions()}
 
@@ -459,7 +471,7 @@ class ApplicationState:
         for session_id in ids:
             current = self.sessions.delete(session_id)
         self.current_session_id = current
-        self._rebuild_runtime(clear_events=True)
+        self._reset_conversation_state()
         self.add_event({"type": "sessions_deleted", "count": len(ids)})
         return {"config": self.config(), **self.list_sessions()}
 
@@ -479,7 +491,7 @@ class ApplicationState:
             if session_id and session_id != self.current_session_id:
                 session = self.sessions.set_current(session_id)
                 self.current_session_id = str(session["id"])
-                self._rebuild_runtime(clear_events=True)
+                self._reset_conversation_state()
             prompt_attachments, stored_attachments = normalize_attachments(attachments, self.skill_registry)
             history = self.sessions.recent_context(self.current_session_id)
             effective_task = build_task_prompt(task, history, prompt_attachments)
@@ -508,7 +520,7 @@ class ApplicationState:
             if session_id and session_id != self.current_session_id:
                 session = self.sessions.set_current(session_id)
                 self.current_session_id = str(session["id"])
-                self._rebuild_runtime(clear_events=True)
+                self._reset_conversation_state()
             prompt_attachments, stored_attachments = normalize_attachments(attachments, self.skill_registry)
             history = self.sessions.recent_context(self.current_session_id)
             effective_task = build_task_prompt(task, history, prompt_attachments)
@@ -664,7 +676,7 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
     def _read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
         if length <= 0 or length > MAX_REQUEST_BYTES:
-            raise ValueError("请求体为空或超过 2 MB")
+            raise ValueError("请求体为空或超过 20 MB")
         payload = json.loads(self.rfile.read(length).decode("utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("请求体必须是 JSON 对象")

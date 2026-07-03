@@ -200,6 +200,7 @@ class SkillRegistry:
                     "removable": self.is_removable(skill),
                     "favorite": skill.name in favorites,
                     "interaction": skill.interaction,
+                    "icon": str(skill.metadata.get("icon") or "").strip()[:4],
                     "trusted": skill.trusted,
                     "visibility": skill.visibility,
                     "hasProcessor": bool(skill.processor),

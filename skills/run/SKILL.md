@@ -2,6 +2,7 @@
 name: run
 description: Run the local application, approved test command, or deterministic project workflow and report the result. Use when the user asks to launch, execute, smoke test, or check whether the app works.
 version: 0.1.0
+icon: "🚀"
 interaction: direct
 display_name: "Run"
 short_description: "启动或执行受控流程，并回报结果。"

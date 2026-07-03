@@ -844,6 +844,7 @@ svg {
 .skill-import-card small { margin-top: 3px; color: var(--muted); font-size: 11.3px; line-height: 1.35; }
 .skill-icon,
 .plus-mark { display: grid; place-items: center; width: 32px; height: 32px; flex: 0 0 auto; border-radius: 9px; font-weight: 720; }
+.skill-icon { font-size: 16px; }
 .skill-icon svg { width: 16px; height: 16px; }
 .skill-icon.violet { color: var(--violet); background: rgba(156, 143, 232, 0.11); }
 .skill-icon.amber { color: var(--amber); background: rgba(217, 170, 94, 0.1); }
@@ -1049,9 +1050,25 @@ svg {
 .file-preview pre code .hl-fn { color: #2f6db0; }
 
 /* --- Per-message copy / retry actions (#9) --- */
-.message-actions { display: flex; gap: 6px; margin-top: 9px; opacity: 0.55; transition: opacity 120ms ease; }
+.message-actions { display: flex; gap: 6px; margin-top: 9px; opacity: 0.55; transition: opacity 140ms ease; }
 .message:hover .message-actions { opacity: 1; }
-.message.user .message-actions { justify-content: flex-end; margin-top: 7px; }
+/* User messages: the action row sits BELOW the bubble (outside it) and only
+   appears while hovering the bubble; the padded top edge touches the bubble so
+   the mouse can travel down without the row vanishing. */
+.message.user .message-actions {
+  grid-column: 1;
+  justify-self: end;
+  justify-content: flex-end;
+  /* Cancel the grid row gap so the buttons sit snugly under the bubble and the
+     mouse can travel down to them without leaving the message row. */
+  margin-top: -9px;
+  opacity: 0;
+  pointer-events: none;
+}
+.message.user:hover .message-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
 .msg-action-btn {
   display: inline-flex;
   align-items: center;
@@ -1232,7 +1249,7 @@ svg {
   width: 52px;
   height: 52px;
   border-radius: 15px;
-  font-size: 20px;
+  font-size: 26px;
   font-weight: 720;
 }
 .skill-tile-name {

@@ -12,7 +12,7 @@ const DICOM_ATTACHMENT_PATTERN = /\.(dcm|dicom)$/i;
 const ARCHIVE_ATTACHMENT_PATTERN = /\.zip$/i;
 const MAX_ARCHIVE_ATTACHMENT_BYTES = 1_500_000;
 const PDF_ATTACHMENT_PATTERN = /\.pdf$/i;
-const MAX_PDF_ATTACHMENT_BYTES = 1_500_000;
+const MAX_PDF_ATTACHMENT_BYTES = 10_000_000;
 
 const state = {
   config: null,
@@ -682,7 +682,7 @@ function svgIcon(paths) {
 function addMessageActions(article, rawText, retryTask) {
   const body = article.querySelector(".message-body");
   if (!body) return;
-  body.querySelector(".message-actions")?.remove();
+  article.querySelector(".message-actions")?.remove();
   const row = document.createElement("div");
   row.className = "message-actions";
 
@@ -713,7 +713,13 @@ function addMessageActions(article, rawText, retryTask) {
     });
     row.append(retryBtn);
   }
-  body.append(row);
+  // User bubbles stay compact: the action row lives below the bubble (as an
+  // article-level sibling) and only appears while hovering the bubble itself.
+  if (article.classList.contains("user")) {
+    article.append(row);
+  } else {
+    body.append(row);
+  }
 }
 
 function appendMessage(role, text, options = {}) {
@@ -1192,9 +1198,17 @@ function skillTone(skill, index) {
   return ["violet", "green", "accent", "red"][index % 4];
 }
 
-function skillInitial(skill) {
-  const name = String(skill.displayName || skill.name || "?").trim();
-  return (name[0] || "?").toUpperCase();
+// Imported skills without an `icon:` frontmatter entry get a stable preset
+// icon picked by name hash; built-in skills declare their own.
+const SKILL_PRESET_ICONS = ["🧩", "⚙️", "🛠️", "🧪", "📐", "🗂️", "💡", "🔧"];
+
+function skillIcon(skill) {
+  const custom = String(skill.icon || "").trim();
+  if (custom) return custom;
+  const name = String(skill.name || "?");
+  let hash = 0;
+  for (let i = 0; i < name.length; i += 1) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  return SKILL_PRESET_ICONS[hash % SKILL_PRESET_ICONS.length];
 }
 
 function stageSkillPrompt(skill) {
@@ -1241,7 +1255,7 @@ function buildSkillRow(skill, index) {
   button.title = `${skill.displayName || skill.name}\n${skill.description || ""}`;
   const icon = document.createElement("span");
   icon.className = `skill-icon ${skillTone(skill, index)}`;
-  icon.textContent = skillInitial(skill);
+  icon.textContent = skillIcon(skill);
   const copy = document.createElement("span");
   copy.className = "skill-copy";
   const title = document.createElement("strong");
@@ -1304,7 +1318,7 @@ function renderSkillsGrid() {
     tile.title = `${skill.displayName || skill.name}\n${skill.description || ""}`;
     const icon = document.createElement("span");
     icon.className = `skill-tile-icon ${skillTone(skill, index)}`;
-    icon.textContent = skillInitial(skill);
+    icon.textContent = skillIcon(skill);
     const name = document.createElement("span");
     name.className = "skill-tile-name";
     name.textContent = skill.displayName || skill.name;
@@ -1612,7 +1626,7 @@ async function readAttachment(file) {
   }
   if (PDF_ATTACHMENT_PATTERN.test(name) || file.type === "application/pdf") {
     if (file.size > MAX_PDF_ATTACHMENT_BYTES) {
-      throw new Error(`PDF 附件超过 ${Math.round(MAX_PDF_ATTACHMENT_BYTES / 1024)} KB`);
+      throw new Error(`PDF 附件超过 ${Math.round(MAX_PDF_ATTACHMENT_BYTES / 1_000_000)} MB 上限`);
     }
     return {
       name,
