@@ -10,6 +10,7 @@ from .build_tools import analyze_build_log, configure_build_profile, get_build_p
 from .config import user_data_dir
 from .memory import append_agent_memory, read_agent_memory
 from .project_tools import (
+    SCRIPT_SUFFIXES,
     list_project_files,
     read_project_text,
     run_unit_tests,
@@ -119,10 +120,14 @@ class ToolRegistry:
             ),
             Tool(
                 "write_project_text",
-                "Create or replace a text file. Relative paths stay inside the project root; absolute paths outside the root require the same explicit human approval.",
+                "Create or replace a text or script file. Relative paths stay inside the project root; absolute "
+                "paths outside the root require the same explicit human approval. Writing a script "
+                "(.bat/.cmd/.ps1/.sh) escalates to execute-level approval because a written script is one "
+                "registration away from running.",
                 {**object_schema, "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]},
                 Risk.WRITE,
                 write_project_text,
+                risk_resolver=self._write_text_risk,
             ),
             Tool(
                 "run_unit_tests",
@@ -165,6 +170,17 @@ class ToolRegistry:
                 {**object_schema, "properties": {"name": {"type": "string"}}, "required": ["name"]},
                 Risk.READ,
                 lambda _root, name: self.skill_registry.read_skill(name),
+            ),
+            Tool(
+                "create_agent_skill",
+                "Author a brand-new local skill yourself from complete SKILL.md content (YAML frontmatter with "
+                "name/description/display_name/short_description/default_prompt plus the markdown body). Use "
+                "this when the user asks to distill a workflow into a reusable skill. It saves to the "
+                "user-level skill directory (workspace-independent) and the skill panel refreshes immediately "
+                "-- never write SKILL.md files via write_project_text.",
+                {**object_schema, "properties": {"skill_md": {"type": "string"}}, "required": ["skill_md"]},
+                Risk.WRITE,
+                self._create_agent_skill,
             ),
             Tool(
                 "install_agent_skill",
@@ -368,6 +384,20 @@ class ToolRegistry:
                 )
             )
         return tools
+
+    def _write_text_risk(self, arguments: dict[str, Any]) -> Risk:
+        suffix = Path(str(arguments.get("path") or "")).suffix.lower()
+        return Risk.EXECUTE if suffix in SCRIPT_SUFFIXES else Risk.WRITE
+
+    def _create_agent_skill(self, _root: Path, skill_md: str) -> dict[str, Any]:
+        created = self.skill_registry.create_skill(skill_md)
+        self._emit({"type": "skill_imported", "skill": created["name"]})
+        return {
+            "name": created["name"],
+            "description": created["description"],
+            "path": created["path"],
+            "message": f"Skill {created['name']} 已创建并立即可用；右侧面板会自动刷新，无需重启。",
+        }
 
     def _install_agent_skill(self, _root: Path, url: str, ref: str) -> dict[str, Any]:
         installed = self.skill_registry.install_github_skill(url, ref=ref)

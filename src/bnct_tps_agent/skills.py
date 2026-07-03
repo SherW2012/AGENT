@@ -235,6 +235,23 @@ class SkillRegistry:
         self.refresh()
         return self.read_skill(name)
 
+    def create_skill(self, skill_md: str) -> dict[str, Any]:
+        """Author a new skill from complete SKILL.md content (agent self-authored
+        skills land in the user-level skill dir and are discoverable at once)."""
+        content = str(skill_md or "").strip()
+        if not content.startswith("---"):
+            raise ValueError("SKILL.md 必须以 YAML frontmatter 开头（用 --- 包裹 name/description 等字段）")
+        if not content.endswith("\n"):
+            content += "\n"
+        temp_parent = (self.data_dir if self.data_dir is not None else self.root / ".bnct_agent") / "tmp"
+        staging = temp_parent / f"skill-{uuid.uuid4().hex}"
+        staging.mkdir(parents=True, exist_ok=True)
+        try:
+            (staging / "SKILL.md").write_text(content, encoding="utf-8")
+            return self.import_skill(staging)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+
     def install_github_skill(self, url: str, *, ref: str = "") -> dict[str, Any]:
         from .skill_installer import stage_github_skill
 

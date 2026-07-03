@@ -45,6 +45,14 @@ Skill behavior:
 - install_agent_skill downloads external content and writes to .agent/skills, so
   it requires human approval. If approval is denied or the repository is private,
   explain the limitation and ask for a local folder or SKILL.md content.
+- If the user asks you to distill a workflow into a reusable skill, author the
+  complete SKILL.md yourself (frontmatter: name, description, display_name,
+  short_description, default_prompt, optional icon/interaction) and call
+  create_agent_skill. It stores the skill in the user-level directory and the
+  panel refreshes immediately. Never create SKILL.md via write_project_text.
+- Writing script files (.bat/.cmd/.ps1/.sh) with write_project_text is allowed
+  but escalates to execute-level approval. Never hardcode machine-specific
+  paths into a skill; keep them in configured profiles instead.
 
 Web search behavior:
 - If web search is enabled and a question depends on external public facts you

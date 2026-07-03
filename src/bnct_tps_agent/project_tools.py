@@ -24,6 +24,11 @@ TEXT_SUFFIXES = {
     ".yaml",
     ".yml",
 }
+# Script files may be written too, but the tool registry escalates them to
+# EXECUTE-level human approval (a written script is one registration away from
+# running), so the approval dialog reflects the real risk.
+SCRIPT_SUFFIXES = {".bat", ".cmd", ".ps1", ".sh"}
+WRITE_SUFFIXES = TEXT_SUFFIXES | SCRIPT_SUFFIXES
 MAX_READ_BYTES = 1_000_000
 MAX_WRITE_BYTES = 1_000_000
 
@@ -114,8 +119,8 @@ def search_project_text(root: Path, query: str, glob: str = "*") -> dict[str, An
 
 def write_project_text(root: Path, path: str, content: str) -> dict[str, Any]:
     target, outside_root = resolve_write_target(root, path)
-    if target.suffix.lower() not in TEXT_SUFFIXES:
-        raise ValueError("MVP 仅允许写入常见文本源文件")
+    if target.suffix.lower() not in WRITE_SUFFIXES:
+        raise ValueError("仅允许写入常见文本源文件和脚本（脚本写入需要更高级别审批）")
     encoded = content.encode("utf-8")
     if len(encoded) > MAX_WRITE_BYTES:
         raise ValueError("写入内容超过 1 MB 上限")

@@ -131,6 +131,16 @@ Skill 分四类交互方式，`SKILL.md` frontmatter 用 `interaction` 与 `visi
 skill 也可以在自己的 `SKILL.md` 里声明 `icon` 自定义。未声明时按名称哈希从一组预设
 图标（🧩 ⚙️ 🛠️ 🧪 📐 🗂️ 💡 🔧）中固定分配一个，保证同一 skill 图标稳定。
 
+**Agent 自己凝练 skill**：让 Agent “把这个流程做成一个 skill”，它会自己撰写完整的
+SKILL.md 并调用 `create_agent_skill`（写入类，需审批）。新 skill 存入用户级 skill
+目录（与工作区无关），注册表即时刷新，右侧面板**无需重启**就会出现。
+
+**脚本文件写入**：`write_project_text` 允许写 `.bat/.cmd/.ps1/.sh`，但会自动升级为
+**execute 级审批**（写好的脚本离运行只差一次注册，所以按执行风险对待）。写普通文本
+仍是 write 级。配合 `configure_build_profile` + `run_build`，形成“写脚本 → 注册 →
+执行”三道人工闸门，例如让 Agent 自己生成 `launch_tps.bat` 并注册为 `launch` 档案，
+之后一句“启动 TPS”即可一键运行。
+
 ### TPS 编译 Skill 的配置
 
 编译脚本路径因机器而异，**绝不写死在代码里**。首次让 Agent 编译时，它会调用

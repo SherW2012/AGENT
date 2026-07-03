@@ -9,6 +9,7 @@ from unittest.mock import patch
 from bnct_tps_agent.audit import AuditLogger
 from bnct_tps_agent.safety import SafetyPolicy
 from bnct_tps_agent.skill_installer import parse_github_skill_url
+from bnct_tps_agent.skills import SkillRegistry
 from bnct_tps_agent.tool_registry import ToolRegistry
 
 
@@ -80,6 +81,67 @@ class SkillInstallTests(unittest.TestCase):
         self.assertTrue((self.root / ".agent" / "skills" / "github-demo" / "SKILL.md").is_file())
         catalog = registry.execute("list_agent_skills", {})
         self.assertIn("github-demo", {item["name"] for item in catalog["result"]["skills"]})
+
+    def test_agent_can_author_its_own_skill(self):
+        data_dir = self.root / "userdata"
+        registry = ToolRegistry(
+            self.root,
+            SafetyPolicy(lambda *_args: True),
+            AuditLogger(self.root / "audit"),
+            skill_registry=SkillRegistry(self.root, data_dir),
+            data_dir=data_dir,
+        )
+        skill_md = (
+            "---\n"
+            "name: tps-launch\n"
+            "description: Launch the TPS application via a registered script.\n"
+            "display_name: TPS 启动\n"
+            "short_description: 一键启动 TPS。\n"
+            'icon: "🚀"\n'
+            "interaction: direct\n"
+            "---\n\n# TPS Launch\n\nUse run_build with the launch profile.\n"
+        )
+        result = registry.execute("create_agent_skill", {"skill_md": skill_md})
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["result"]["name"], "tps-launch")
+        # Stored in the user-level dir and immediately discoverable, no restart.
+        self.assertTrue((data_dir / "skills" / "tps-launch" / "SKILL.md").is_file())
+        catalog = registry.execute("list_agent_skills", {})
+        self.assertIn("tps-launch", {item["name"] for item in catalog["result"]["skills"]})
+
+    def test_create_agent_skill_rejects_content_without_frontmatter(self):
+        registry = ToolRegistry(
+            self.root,
+            SafetyPolicy(lambda *_args: True),
+            AuditLogger(self.root / "audit"),
+            skill_registry=SkillRegistry(self.root, self.root / "userdata"),
+            data_dir=self.root / "userdata",
+        )
+        result = registry.execute("create_agent_skill", {"skill_md": "# 只有正文没有 frontmatter"})
+        self.assertFalse(result["ok"])
+
+    def test_script_writes_escalate_to_execute_approval(self):
+        recorded: list[tuple[str, str]] = []
+
+        def approver(tool, risk, _arguments):
+            recorded.append((tool, risk.value))
+            return True
+
+        registry = ToolRegistry(
+            self.root,
+            SafetyPolicy(approver),
+            AuditLogger(self.root / "audit"),
+            data_dir=self.root / "userdata",
+        )
+        result = registry.execute(
+            "write_project_text",
+            {"path": "launch_tps.bat", "content": "@echo off\nstart \"\" app.exe\n"},
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertIn(("write_project_text", "execute"), recorded)
+        plain = registry.execute("write_project_text", {"path": "notes.md", "content": "hi"})
+        self.assertTrue(plain["ok"], plain)
+        self.assertIn(("write_project_text", "write"), recorded)
 
     def test_agent_tool_requires_approval_before_network_download(self):
         registry = ToolRegistry(

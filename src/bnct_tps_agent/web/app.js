@@ -784,6 +784,7 @@ function toolDisplayName(name) {
     fetch_url: "读取网页",
     web_search: "联网搜索",
     install_agent_skill: "安装 Skill",
+    create_agent_skill: "创建 Skill",
     list_agent_skills: "读取 Skill 列表",
     read_agent_skill: "读取 Skill",
     list_project_files: "浏览工作区",
@@ -1804,6 +1805,14 @@ function handleServerEvent(event) {
   }
   if (event.type === "agent_stopped") {
     setActivity("agent", "已停止", "failed");
+  }
+  if (event.type === "skill_imported" || event.type === "skill_deleted") {
+    // A skill was created/installed/removed mid-session (possibly by the agent
+    // itself): refresh the catalog so the panel updates without a restart.
+    api("/api/config").then(updateConfig).catch(() => {});
+    if (event.type === "skill_imported" && event.skill) {
+      showToast(`新 skill 已加入面板：${event.skill}`);
+    }
   }
   if (event.type === "tool_started" && event.tool === "web_search") {
     showToast("正在联网搜索公开资料...");
