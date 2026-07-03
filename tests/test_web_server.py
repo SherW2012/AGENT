@@ -189,7 +189,7 @@ class WebServerTests(unittest.TestCase):
         self.assertEqual(config["memory"]["projectFile"], "CLAUDE.md")
         self.assertIn("skills", config)
         skill_names = {item["name"] for item in config["skills"]}
-        self.assertTrue({"dicom-tags", "run", "create-word", "tps-build-debug"}.issubset(skill_names))
+        self.assertTrue({"dicom-tags", "create-word", "tps-build-debug"}.issubset(skill_names))
         self.assertNotIn("web-search", skill_names)
         self.assertIn("README.md", files["files"])
 
@@ -213,10 +213,10 @@ class WebServerTests(unittest.TestCase):
         names = {item["name"] for item in config["skills"]}
         self.assertIn("create-word", names)
         self.assertIn("create-ppt", names)
-        result = self._post_json("/api/skill/favorites", {"names": ["create-word", "run"]})
-        self.assertEqual(set(result["favorites"]), {"create-word", "run"})
+        result = self._post_json("/api/skill/favorites", {"names": ["create-word", "create-ppt"]})
+        self.assertEqual(set(result["favorites"]), {"create-word", "create-ppt"})
         favorites = {item["name"] for item in result["config"]["skills"] if item.get("favorite")}
-        self.assertEqual(favorites, {"create-word", "run"})
+        self.assertEqual(favorites, {"create-word", "create-ppt"})
 
     def test_steer_requires_a_running_task(self):
         with self.assertRaises(HTTPError) as context:
@@ -352,7 +352,7 @@ class WebServerTests(unittest.TestCase):
     def test_skill_registry_loads_and_reads_dicom_skill(self):
         registry = SkillRegistry(self.root)
         catalog = registry.public_catalog()
-        self.assertTrue({"dicom-tags", "run", "create-word", "tps-build-debug"}.issubset({item["name"] for item in catalog}))
+        self.assertTrue({"dicom-tags", "create-word", "tps-build-debug"}.issubset({item["name"] for item in catalog}))
         self.assertNotIn("web-search", {item["name"] for item in catalog})
         self.assertIn("web-search", {item["name"] for item in registry.public_catalog(include_background=True)})
         self.assertIn("web-search", registry.catalog_context())

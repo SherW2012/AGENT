@@ -12,7 +12,7 @@
 - Claude 风格本地 Web 工作台：会话列表、对话、工作区、文件预览、连接设置、审批弹窗
 - 本地会话持久化、收藏置顶、搜索、删除和项目级/私有记忆
 - Claude 风格 `SKILL.md` 能力包发现机制，支持 `skills/`、`.agent/skills/`、`.claude/skills/`
-- 右侧 Skill 面板默认装载 `run`、`dicom-tags`、Office 生成与 TPS 编译系列 skill，并支持从本地导入新的 skill
+- 右侧 Skill 面板默认装载 `dicom-tags`、Office 生成与 TPS 编译系列 skill，并支持从本地导入新的 skill
 - 后台 `web-search` skill：支持 `auto`/`ask`/`off` 三种联网搜索模式，默认在需要最新公开知识时自动搜索
 - 支持 OpenAI、DeepSeek、Kimi 三种供应商和各自独立的 Key、模型、Base URL
 - OpenAI Responses API 与兼容 Chat Completions 的多轮工具调用循环
@@ -101,7 +101,6 @@ Web 右侧 Skill 面板会显示当前已发现的 skill。点击虚线加号可
 `SKILL.md` 的文件夹，导入后会复制到 `.agent/skills/<name>`，因此默认只在本机生效，
 不会自动进入 Git。项目内置的默认 skill 位于 `skills/`，包括：
 
-- `run`：启动或执行受控流程，并报告结果。
 - `dicom-tags`：解析 DICOM tag，脱敏直接标识符并省略 Pixel Data。
 - `create-word`：在工作目录生成 `.docx` Word 文档。
 - `create-ppt`：在工作目录生成 `.pptx` 演示文稿。
@@ -116,7 +115,7 @@ Skill 分四类交互方式，`SKILL.md` frontmatter 用 `interaction` 与 `visi
 
 | 类别 | 行为 | 例子 |
 |---|---|---|
-| `direct` ⚡ | 点击即填入完整指令，回车直接执行 | `run`、`tps-build-debug/release` |
+| `direct` ⚡ | 点击即填入完整指令，回车直接执行 | `tps-build-debug/release` |
 | `guided`（默认） | 点击填入说明模板，需补充目标后发送 | `create-word/ppt/excel`、`tps-build-diagnose` |
 | 附件驱动 | 上传匹配类型的附件自动触发 | `dicom-tags` |
 | `background` | 不显示在面板，需要时自动使用 | `web-search`、`archive-extract`、`pdf-extract` |
