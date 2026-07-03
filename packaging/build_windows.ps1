@@ -1,4 +1,4 @@
-# Build a distributable Windows package of BNCT TPS Agent.
+﻿# Build a distributable Windows package of BNCT TPS Agent.
 #
 # Run this ON WINDOWS from the repository root:
 #   powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
