@@ -184,6 +184,15 @@ def append_agent_memory(root: Path, note: str, category: str = "Preference") -> 
         raise ValueError(f"记忆内容不能超过 {MAX_NOTE_CHARS} 个字符")
     paths = ensure_memory_files(root)
     target = root / paths["local"]
+    existing = _read_bounded(target)
+    if note in existing:
+        return {
+            "path": paths["local"],
+            "category": category,
+            "chars": len(note),
+            "duplicate": True,
+            "message": "相同内容已在记忆中，未重复写入。",
+        }
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     block = f"\n\n## {category}\n\n- {timestamp}: {note}\n"
     with target.open("a", encoding="utf-8") as handle:
@@ -192,4 +201,55 @@ def append_agent_memory(root: Path, note: str, category: str = "Preference") -> 
         "path": paths["local"],
         "category": category,
         "chars": len(note),
+    }
+
+
+def forget_agent_memory(root: Path, data_dir: Path, match: str) -> dict[str, Any]:
+    """Delete memory entries containing `match` from both the explicit local
+    memory file and the implicit auto-memory file. Deterministic substring
+    matching on bullet lines only — headers and defaults stay intact."""
+    needle = str(match or "").strip()
+    if len(needle) < 2:
+        raise ValueError("请提供至少 2 个字符的匹配内容，避免误删")
+    removed = {"explicit": 0, "implicit": 0}
+    folded = needle.casefold()
+
+    paths = ensure_memory_files(root)
+    local_path = root / paths["local"]
+    try:
+        lines = local_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except FileNotFoundError:
+        lines = []
+    kept = []
+    for line in lines:
+        if line.lstrip().startswith("- ") and folded in line.casefold():
+            removed["explicit"] += 1
+            continue
+        kept.append(line)
+    if removed["explicit"]:
+        local_path.write_text("\n".join(kept).rstrip() + "\n", encoding="utf-8")
+
+    auto_path = _auto_memory_path(data_dir)
+    try:
+        auto_lines = auto_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except FileNotFoundError:
+        auto_lines = []
+    kept_auto = []
+    for line in auto_lines:
+        if line.startswith("- ") and folded in line.casefold():
+            removed["implicit"] += 1
+            continue
+        kept_auto.append(line)
+    if removed["implicit"]:
+        auto_path.write_text("\n".join(kept_auto).rstrip() + "\n", encoding="utf-8")
+
+    total = removed["explicit"] + removed["implicit"]
+    return {
+        "match": needle,
+        "removedExplicit": removed["explicit"],
+        "removedImplicit": removed["implicit"],
+        "message": (
+            f"已删除 {removed['explicit']} 条显式记忆、{removed['implicit']} 条隐式记忆。"
+            if total else "没有找到匹配的记忆条目。"
+        ),
     }

@@ -843,6 +843,7 @@ function toolDisplayName(name) {
     analyze_build_log: "分析编译日志",
     read_agent_memory: "读取记忆",
     append_agent_memory: "写入记忆",
+    forget_agent_memory: "删除记忆",
   };
   return labels[name] || name || "工具调用";
 }

@@ -8,7 +8,7 @@ from typing import Any, Callable
 from .audit import AuditLogger, sha256_text
 from .build_tools import analyze_build_log, configure_build_profile, get_build_profiles, run_build
 from .config import user_data_dir
-from .memory import append_agent_memory, read_agent_memory
+from .memory import append_agent_memory, forget_agent_memory, read_agent_memory
 from .project_tools import (
     SCRIPT_SUFFIXES,
     list_project_files,
@@ -157,6 +157,16 @@ class ToolRegistry:
                 },
                 Risk.WRITE,
                 append_agent_memory,
+            ),
+            Tool(
+                "forget_agent_memory",
+                "Delete memory entries containing the given text from BOTH the explicit local memory file and "
+                "the implicit auto-memory file. Use when the user asks to forget/delete/remove a memory. Pass "
+                "the distinctive text of the entries to remove (at least 2 characters); matching is a "
+                "deterministic substring check on memory bullet lines.",
+                {**object_schema, "properties": {"match": {"type": "string"}}, "required": ["match"]},
+                Risk.WRITE,
+                lambda root, match: forget_agent_memory(root, self.data_dir, match),
             ),
             Tool(
                 "list_agent_skills",
