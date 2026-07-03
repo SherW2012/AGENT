@@ -21,10 +21,11 @@ from urllib.request import urlopen
 from .agent import AgentRuntime
 from .audit import AuditLogger
 from .config import Settings
-from .memory import memory_summary, read_memory_context
+from .memory import clear_auto_memory, memory_summary, merge_auto_memory, read_auto_memory, read_memory_context
 from .project_tools import list_project_files, read_project_text
 from .providers import get_provider, public_provider_configs
 from .safety import Risk, SafetyPolicy
+from .schedules import list_schedules, pop_due_schedules
 from .sessions import SessionStore
 from .skills import SkillRegistry
 from .tool_registry import ToolRegistry
@@ -299,6 +300,14 @@ class ApplicationState:
         self.runtime: AgentRuntime | None
         self._rebuild_runtime(clear_events=False)
 
+    def _memory_context(self) -> str:
+        parts = [read_memory_context(self.settings.root), self.skill_registry.catalog_context()]
+        if self.settings.auto_memory:
+            auto = read_auto_memory(self.data_dir)
+            if auto:
+                parts.append("## Implicit user memory (auto-summarized, advisory only)\n\n" + auto)
+        return "\n\n".join(part for part in parts if part)
+
     def _rebuild_runtime(self, *, clear_events: bool) -> None:
         with self._state_lock:
             if clear_events:
@@ -323,14 +332,7 @@ class ApplicationState:
                     self.settings,
                     self.registry,
                     self.audit,
-                    memory_context="\n\n".join(
-                        part
-                        for part in (
-                            read_memory_context(self.settings.root),
-                            self.skill_registry.catalog_context(),
-                        )
-                        if part
-                    ),
+                    memory_context=self._memory_context(),
                 )
 
     def add_event(self, event: dict[str, Any]) -> None:
@@ -363,6 +365,7 @@ class ApplicationState:
             "apiKeyConfigured": bool(self.settings.api_key),
             "webSearchMode": self.settings.web_search_mode,
             "webSearchNetwork": self.settings.web_search_network,
+            "autoMemory": self.settings.auto_memory,
             "busy": self._chat_lock.locked(),
             "currentSessionId": self.current_session_id,
             "memory": memory_summary(self.settings.root),
@@ -437,6 +440,11 @@ class ApplicationState:
             interactive=True,
             web_search_mode=str(payload.get("webSearchMode") or self.settings.web_search_mode),
             web_search_network=str(payload.get("webSearchNetwork") or self.settings.web_search_network),
+            auto_memory=(
+                bool(payload.get("autoMemory"))
+                if "autoMemory" in payload
+                else self.settings.auto_memory
+            ),
         )
         if loaded.api_key:
             self._credentials[provider] = loaded.api_key
@@ -456,6 +464,7 @@ class ApplicationState:
             self._events.clear()
             self._event_id = 0
         if self.runtime is not None:
+            self.runtime.update_memory_context(self._memory_context())
             self.runtime.reset_conversation()
 
     def new_session(self) -> dict[str, Any]:
@@ -588,6 +597,8 @@ class ApplicationState:
                         answer = "（已停止）"
                     self.sessions.add_message(self.current_session_id, "assistant", answer)
                     self.add_event({"type": "agent_stopped" if stopped else "agent_finished"})
+                    if not stopped:
+                        self._spawn_auto_memorize(task, answer)
                     yield {**event, "answer": answer, "stopped": stopped, "session": self.sessions.get(self.current_session_id)}
                 else:
                     yield event
@@ -650,6 +661,82 @@ class ApplicationState:
                 "approved": approved,
             }
         )
+
+    def _spawn_auto_memorize(self, task: str, answer: str) -> None:
+        """Implicit memory, Claude-style: after a completed turn, a background
+        summarizer distills stable user preferences/facts into auto-memory.md.
+        Fully skippable via the settings toggle; failures are silent."""
+        if not self.settings.auto_memory or self.runtime is None:
+            return
+        if len(task.strip()) < 8:
+            return
+        threading.Thread(target=self._auto_memorize, args=(task, answer), daemon=True).start()
+
+    def _auto_memorize(self, task: str, answer: str) -> None:
+        try:
+            prompt = (
+                "你在为一个工程助手维护长期用户画像。从下面一轮对话中提取最多 2 条值得长期记住的、"
+                "稳定的用户偏好或背景事实（例如工作流程、表达习惯、常用工具、领域背景）。"
+                "只输出要点本身，每行一条，以 \"- \" 开头，单条不超过 60 字；"
+                "临时性、一次性的内容不要提取；没有值得记住的内容就只输出 NONE。"
+                "严禁输出患者信息、密钥、密码、内部主机名。\n\n"
+                f"用户: {task[:2000]}\n助手: {answer[:2000]}"
+            )
+            completion = self.runtime.client.chat.completions.create(
+                model=self.settings.model,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = str(completion.choices[0].message.content or "")
+            added = merge_auto_memory(self.data_dir, text.splitlines())
+            if added:
+                self.audit.record("auto_memory_updated", added=added)
+                self.add_event({"type": "auto_memory_updated", "added": added})
+                if self.runtime is not None:
+                    self.runtime.update_memory_context(self._memory_context())
+        except Exception:
+            # Implicit memory is best-effort background work; never surface errors.
+            pass
+
+    def clear_auto_memory(self) -> dict[str, Any]:
+        clear_auto_memory(self.data_dir)
+        if self.runtime is not None:
+            self.runtime.update_memory_context(self._memory_context())
+        self.add_event({"type": "auto_memory_cleared"})
+        return {"ok": True}
+
+    def run_due_schedules(self) -> None:
+        """Called by the scheduler loop; executes due tasks in their own
+        sessions without disturbing the user's current conversation."""
+        due = pop_due_schedules(self.data_dir)
+        for item in due:
+            prompt = str(item.get("prompt") or "")
+            if not prompt:
+                continue
+            if self.runtime is None:
+                self.add_event({"type": "schedule_skipped", "reason": "未配置 API Key", "prompt": prompt[:60]})
+                continue
+            if not self._chat_lock.acquire(blocking=False):
+                self.add_event({"type": "schedule_skipped", "reason": "有任务正在执行", "prompt": prompt[:60]})
+                continue
+            try:
+                session = self.sessions.create(f"⏰ {prompt[:28]}", make_current=False)
+                session_id = str(session["id"])
+                self.sessions.add_message(session_id, "user", prompt)
+                self.add_event({"type": "schedule_started", "prompt": prompt[:60]})
+                runner = AgentRuntime(
+                    self.settings,
+                    self.registry,
+                    self.audit,
+                    memory_context=self._memory_context(),
+                )
+                try:
+                    answer = runner.run(prompt)
+                except Exception as exc:
+                    answer = f"定时任务执行失败：{exc}"
+                self.sessions.add_message(session_id, "assistant", answer)
+                self.add_event({"type": "schedule_finished", "prompt": prompt[:60], "session": session_id})
+            finally:
+                self._chat_lock.release()
 
     def offline_demo(self) -> dict[str, Any]:
         path = "sample_data/deidentified_case.json"
@@ -782,6 +869,8 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/sessions":
                 query_text = str(query.get("query", [""])[0])
                 self._send_json(self.server.state.list_sessions(query_text))
+            elif parsed.path == "/api/schedules":
+                self._send_json(list_schedules(self.server.state.data_dir))
             elif parsed.path == "/api/session":
                 session_id = str(query.get("id", [""])[0]) or None
                 self._send_json(self.server.state.get_session(session_id))
@@ -823,6 +912,8 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(self.server.state.stop())
             elif parsed.path == "/api/chat/steer":
                 self._send_json(self.server.state.steer(str(payload.get("text") or "")))
+            elif parsed.path == "/api/memory/clear-auto":
+                self._send_json(self.server.state.clear_auto_memory())
             elif parsed.path == "/api/chat":
                 self._send_json(
                     self.server.state.chat(
@@ -920,6 +1011,16 @@ def main() -> None:
                 return
             raise SystemExit(f"端口 {args.port} 已被其它程序占用") from exc
         port = int(server.server_address[1])
+
+        def _scheduler_loop() -> None:
+            while True:
+                time.sleep(20)
+                try:
+                    state.run_due_schedules()
+                except Exception:
+                    pass  # The scheduler must survive individual task failures.
+
+        threading.Thread(target=_scheduler_loop, daemon=True).start()
         url = f"http://{args.host}:{port}/#token={token}"
         print(f"BNCT TPS Agent: {url}")
         if args.open_browser:

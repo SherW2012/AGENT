@@ -101,6 +101,8 @@ const elements = {
   uiBlocker: document.querySelector("#ui-blocker"),
   uiBlockerLabel: document.querySelector("#ui-blocker-label"),
   toastStack: document.querySelector("#toast-stack"),
+  autoMemoryToggle: document.querySelector("#auto-memory-toggle"),
+  clearAutoMemory: document.querySelector("#clear-auto-memory-button"),
   webSearchInputs: document.querySelectorAll('input[name="web-search-mode"]'),
   webSearchNetworkInputs: document.querySelectorAll('input[name="web-search-network"]'),
   workspaceChip: document.querySelector("#workspace-chip"),
@@ -252,6 +254,7 @@ function updateConfig(config) {
   elements.providerInputs.forEach((input) => { input.checked = input.value === config.provider; });
   elements.webSearchInputs.forEach((input) => { input.checked = input.value === (config.webSearchMode || "auto"); });
   elements.webSearchNetworkInputs.forEach((input) => { input.checked = input.value === (config.webSearchNetwork || "auto"); });
+  elements.autoMemoryToggle.checked = config.autoMemory !== false;
   syncProviderFields(config.provider, false);
   elements.model.value = config.model;
   elements.baseUrl.value = config.baseUrl || "";
@@ -794,6 +797,9 @@ function toolDisplayName(name) {
     web_search: "联网搜索",
     install_agent_skill: "安装 Skill",
     create_agent_skill: "创建 Skill",
+    create_scheduled_task: "创建定时任务",
+    list_scheduled_tasks: "查看定时任务",
+    delete_scheduled_task: "删除定时任务",
     list_agent_skills: "读取 Skill 列表",
     read_agent_skill: "读取 Skill",
     list_project_files: "浏览工作区",
@@ -1300,8 +1306,10 @@ function buildSkillRow(skill, index) {
   button.className = "skill-action";
   button.type = "button";
   button.title = `${skill.displayName || skill.name}\n${skill.description || ""}`;
+  // The favorites panel keeps one calm, unified tone; per-skill colors live
+  // only in the "全部" grid.
   const icon = document.createElement("span");
-  icon.className = `skill-icon ${skillTone(skill, index)}`;
+  icon.className = "skill-icon neutral";
   icon.replaceChildren(skillIconElement(skill));
   const copy = document.createElement("span");
   copy.className = "skill-copy";
@@ -1894,6 +1902,13 @@ function handleServerEvent(event) {
   if (event.type === "steer_received") {
     setActivity("steer", "已收到补充引导，下一轮生效", "done");
   }
+  if (event.type === "schedule_finished") {
+    showToast("定时任务已执行完成，结果保存在新会话中。");
+    loadSessions().catch(() => {});
+  }
+  if (event.type === "schedule_skipped") {
+    showToast(`定时任务已跳过：${event.reason || ""}`, "error");
+  }
   if (event.type === "skill_imported" || event.type === "skill_deleted") {
     // A skill was created/installed/removed mid-session (possibly by the agent
     // itself): refresh the catalog so the panel updates without a restart.
@@ -1972,6 +1987,7 @@ function openSettings(section = "connection") {
     elements.root.value = state.config.root;
     elements.webSearchInputs.forEach((input) => { input.checked = input.value === (state.config.webSearchMode || "auto"); });
     elements.webSearchNetworkInputs.forEach((input) => { input.checked = input.value === (state.config.webSearchNetwork || "auto"); });
+    elements.autoMemoryToggle.checked = state.config.autoMemory !== false;
   }
   switchSettingsSection(section);
   elements.apiKey.value = "";
@@ -1995,6 +2011,7 @@ async function saveSettings(event) {
     root: elements.root.value.trim(),
     webSearchMode: selectedWebSearchMode(),
     webSearchNetwork: selectedWebSearchNetwork(),
+    autoMemory: elements.autoMemoryToggle.checked,
   };
   try {
     const config = await api("/api/config", { method: "POST", body: JSON.stringify(payload) });
@@ -2180,6 +2197,15 @@ function bindEvents() {
   elements.fileSearch.addEventListener("input", () => renderFiles(elements.fileSearch.value));
   elements.sessionSearch.addEventListener("input", () => loadSessions(elements.sessionSearch.value));
   elements.settingsButton.addEventListener("click", () => openSettings());
+  elements.clearAutoMemory.addEventListener("click", async () => {
+    if (!window.confirm("清空自动总结的隐式记忆？显式记忆不受影响。")) return;
+    try {
+      await api("/api/memory/clear-auto", { method: "POST", body: "{}" });
+      showToast("自动记忆已清空");
+    } catch (error) {
+      showToast(error.message, "error");
+    }
+  });
   elements.settingsTabs.forEach((tab) => {
     tab.addEventListener("click", () => switchSettingsSection(tab.dataset.settingsSection));
   });

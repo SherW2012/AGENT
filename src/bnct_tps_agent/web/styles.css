@@ -846,6 +846,7 @@ svg {
 .skill-icon,
 .plus-mark { display: grid; place-items: center; width: 32px; height: 32px; flex: 0 0 auto; border-radius: 9px; font-weight: 720; }
 .skill-icon { font-size: 16px; }
+.skill-icon.neutral { color: var(--accent); background: var(--accent-soft); }
 .skill-icon svg { width: 17px; height: 17px; stroke-width: 1.9; }
 .skill-tile-icon svg { width: 26px; height: 26px; stroke-width: 1.7; }
 .skill-icon svg { width: 16px; height: 16px; }
@@ -916,6 +917,20 @@ svg {
 .settings-section-heading p,
 .settings-help { margin: 0; color: var(--text-soft); font-size: 12px; line-height: 1.65; }
 .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 17px; }
+.toggle-row {
+  display: flex !important;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 13px;
+  background: #f7fafd;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.toggle-row input { width: 17px !important; height: 17px !important; margin-top: 2px; flex: 0 0 auto; accent-color: var(--accent); }
+.toggle-row strong { display: block; font-size: 13px; }
+.toggle-row small { display: block; margin-top: 4px; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+.memory-actions { margin-top: 14px; }
 .provider-picker,
 .web-search-picker { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 0 0 14px; padding: 0; border: 0; }
 .provider-picker legend,

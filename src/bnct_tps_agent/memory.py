@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -7,8 +8,20 @@ from typing import Any
 
 PROJECT_MEMORY_FILE = "CLAUDE.md"
 LOCAL_MEMORY_FILE = ".bnct_agent/memory.md"
+AUTO_MEMORY_FILE = "auto-memory.md"
 MAX_MEMORY_CHARS = 24_000
 MAX_NOTE_CHARS = 4_000
+MAX_AUTO_MEMORY_LINES = 80
+MAX_AUTO_LINE_CHARS = 200
+
+# Implicit memory must never absorb identifiers or secrets, whatever the
+# summarizer produces. Deterministic gate, mirroring the web-search guard.
+_AUTO_MEMORY_BLOCKLIST = [
+    re.compile(r"(?i)\b(sk-[A-Za-z0-9_-]{12,}|api[_ -]?key|secret|token|password|bearer)\b"),
+    re.compile(r"(?i)\b(patient|mrn|medical record|accession number)\b"),
+    re.compile(r"(患者|身份证|住院号|病历号|病案号|手机号|出生日期|床号)"),
+    re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"),
+]
 
 
 DEFAULT_PROJECT_MEMORY = """# BNCT TPS Agent Memory
@@ -96,6 +109,70 @@ def read_agent_memory(root: Path) -> dict[str, Any]:
         "files": paths,
         "content": read_memory_context(root),
     }
+
+
+def _auto_memory_path(data_dir: Path) -> Path:
+    return data_dir / AUTO_MEMORY_FILE
+
+
+def read_auto_memory(data_dir: Path) -> str:
+    return _read_bounded(_auto_memory_path(data_dir), limit=12_000).strip()
+
+
+def sanitize_auto_memory_lines(lines: list[str]) -> list[str]:
+    """Keep only short, plain preference bullets; drop anything sensitive."""
+    cleaned: list[str] = []
+    for raw in lines:
+        line = str(raw).strip().lstrip("-•").strip()
+        if not line or line.upper() == "NONE":
+            continue
+        if len(line) > MAX_AUTO_LINE_CHARS:
+            line = line[:MAX_AUTO_LINE_CHARS]
+        if any(pattern.search(line) for pattern in _AUTO_MEMORY_BLOCKLIST):
+            continue
+        cleaned.append(line)
+    return cleaned
+
+
+def merge_auto_memory(data_dir: Path, lines: list[str]) -> int:
+    """Append new de-duplicated bullets to the implicit memory file, keeping the
+    newest MAX_AUTO_MEMORY_LINES entries. Returns how many were added."""
+    candidates = sanitize_auto_memory_lines(lines)
+    if not candidates:
+        return 0
+    path = _auto_memory_path(data_dir)
+    existing: list[str] = []
+    try:
+        existing = [
+            line[2:].strip()
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+            if line.startswith("- ")
+        ]
+    except FileNotFoundError:
+        pass
+    known = {line.casefold() for line in existing}
+    added: list[str] = []
+    for line in candidates:
+        key = line.casefold()
+        if key not in known:
+            known.add(key)  # also de-dupe within the incoming batch
+            added.append(line)
+    if not added:
+        return 0
+    merged = (existing + added)[-MAX_AUTO_MEMORY_LINES:]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = "# Auto Memory (隐式记忆)\n\n自动从日常对话总结，可在设置中关闭或清空。\n\n" + "\n".join(
+        f"- {line}" for line in merged
+    ) + "\n"
+    path.write_text(body, encoding="utf-8")
+    return len(added)
+
+
+def clear_auto_memory(data_dir: Path) -> None:
+    try:
+        _auto_memory_path(data_dir).unlink()
+    except FileNotFoundError:
+        pass
 
 
 def append_agent_memory(root: Path, note: str, category: str = "Preference") -> dict[str, Any]:

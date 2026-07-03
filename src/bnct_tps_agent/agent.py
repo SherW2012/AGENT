@@ -201,6 +201,13 @@ class AgentRuntime:
                 "content": "\n".join(texts) + "\n\n[图片已省略：视觉模型调用失败，本轮退回纯文本模型]",
             }
 
+    def update_memory_context(self, memory_context: str) -> None:
+        """Refresh the system instructions (e.g. after implicit memory grew)
+        without rebuilding the runtime."""
+        self.instructions = self._build_instructions(memory_context)
+        if self.messages and self.messages[0].get("role") == "system":
+            self.messages[0] = {"role": "system", "content": self.instructions}
+
     def reset_conversation(self) -> None:
         """Start a fresh conversation without rebuilding the runtime.
 

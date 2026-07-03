@@ -122,7 +122,7 @@ class SessionStore:
             raise FileNotFoundError("会话不存在")
         return session
 
-    def create(self, title: str = "新会话") -> dict[str, Any]:
+    def create(self, title: str = "新会话", *, make_current: bool = True) -> dict[str, Any]:
         timestamp = now_iso()
         session = {
             "id": uuid.uuid4().hex,
@@ -133,7 +133,10 @@ class SessionStore:
             "messages": [],
         }
         self._write(session)
-        self.set_current(str(session["id"]))
+        # Scheduled runs write into their own session without hijacking the
+        # session the user is currently looking at.
+        if make_current:
+            self.set_current(str(session["id"]))
         return session
 
     def delete(self, session_id: str) -> str:

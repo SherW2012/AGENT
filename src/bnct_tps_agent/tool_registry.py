@@ -19,6 +19,7 @@ from .project_tools import (
 )
 from .office_tools import create_excel, create_powerpoint, create_word_document
 from .safety import PolicyDenied, Risk, SafetyPolicy
+from .schedules import create_schedule, delete_schedule, list_schedules
 from .skills import SkillRegistry
 from .tps_tools import summarize_plan_snapshot, validate_plan_snapshot
 from .web_search import fetch_url, looks_sensitive_url, looks_sensitive_web_query, web_search
@@ -318,6 +319,42 @@ class ToolRegistry:
                 {**object_schema, "properties": {"profile": {"type": "string"}}, "required": ["profile"]},
                 Risk.EXECUTE,
                 lambda root, profile: run_build(root, self.data_dir, profile),
+            ),
+            Tool(
+                "create_scheduled_task",
+                "Create a recurring scheduled task. The prompt will be executed by the agent automatically while "
+                "the local service is running, with results saved into a dedicated session. schedule_type is "
+                "'interval' (every interval_minutes minutes, >=5; pass daily_time as empty string) or 'daily' "
+                "(every day at daily_time 'HH:MM'; pass interval_minutes as 0). Missed occurrences while the "
+                "service is offline are skipped, not replayed.",
+                {
+                    **object_schema,
+                    "properties": {
+                        "prompt": {"type": "string"},
+                        "schedule_type": {"type": "string"},
+                        "interval_minutes": {"type": "integer"},
+                        "daily_time": {"type": "string"},
+                    },
+                    "required": ["prompt", "schedule_type", "interval_minutes", "daily_time"],
+                },
+                Risk.WRITE,
+                lambda root, prompt, schedule_type, interval_minutes, daily_time: create_schedule(
+                    self.data_dir, prompt, schedule_type, interval_minutes, daily_time
+                ),
+            ),
+            Tool(
+                "list_scheduled_tasks",
+                "List the user's recurring scheduled tasks with their next run times.",
+                {**object_schema, "properties": {}, "required": []},
+                Risk.READ,
+                lambda root: list_schedules(self.data_dir),
+            ),
+            Tool(
+                "delete_scheduled_task",
+                "Delete a recurring scheduled task by its id (see list_scheduled_tasks).",
+                {**object_schema, "properties": {"id": {"type": "string"}}, "required": ["id"]},
+                Risk.WRITE,
+                lambda root, id: delete_schedule(self.data_dir, id),
             ),
             Tool(
                 "analyze_build_log",

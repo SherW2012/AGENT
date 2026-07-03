@@ -1,0 +1,79 @@
+import shutil
+import time
+import unittest
+import uuid
+from pathlib import Path
+
+from bnct_tps_agent.memory import merge_auto_memory, read_auto_memory, sanitize_auto_memory_lines
+from bnct_tps_agent.schedules import create_schedule, delete_schedule, list_schedules, pop_due_schedules
+from bnct_tps_agent.sessions import SessionStore
+
+
+class SchedulesAndMemoryTests(unittest.TestCase):
+    def setUp(self):
+        base = Path(__file__).resolve().parents[1] / "tests" / "runtime_output"
+        self.data_dir = base / f"sched-{uuid.uuid4().hex}"
+        self.data_dir.mkdir(parents=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.data_dir, ignore_errors=True)
+
+    def test_interval_schedule_lifecycle(self):
+        created = create_schedule(self.data_dir, "跑一遍 Debug 编译", "interval", interval_minutes=30)
+        self.assertEqual(created["scheduleType"], "interval")
+        listing = list_schedules(self.data_dir)
+        self.assertEqual(listing["count"], 1)
+        delete_schedule(self.data_dir, created["id"])
+        self.assertEqual(list_schedules(self.data_dir)["count"], 0)
+
+    def test_schedule_validation(self):
+        with self.assertRaises(ValueError):
+            create_schedule(self.data_dir, "x", "interval", interval_minutes=1)
+        with self.assertRaises(ValueError):
+            create_schedule(self.data_dir, "x", "daily", daily_time="25:99")
+        with self.assertRaises(ValueError):
+            create_schedule(self.data_dir, "", "daily", daily_time="09:00")
+
+    def test_due_schedules_pop_once_and_advance(self):
+        create_schedule(self.data_dir, "定时检查", "interval", interval_minutes=30)
+        future = time.time() + 31 * 60
+        due = pop_due_schedules(self.data_dir, now=future)
+        self.assertEqual(len(due), 1)
+        # Popping again at the same moment must not double-fire.
+        self.assertEqual(pop_due_schedules(self.data_dir, now=future), [])
+
+    def test_daily_next_run_is_in_the_future(self):
+        created = create_schedule(self.data_dir, "每日汇总", "daily", daily_time="09:00")
+        self.assertTrue(created["nextRun"])
+        self.assertEqual(created["dailyTime"], "09:00")
+
+    def test_session_create_without_switching_current(self):
+        store = SessionStore(self.data_dir)
+        current = store.create("用户会话")["id"]
+        background = store.create("⏰ 定时任务", make_current=False)["id"]
+        self.assertEqual(store.current_id(), current)
+        self.assertNotEqual(background, current)
+
+    def test_auto_memory_sanitizer_blocks_sensitive_lines(self):
+        lines = [
+            "- 用户偏好中文回答，术语保留英文",
+            "- 患者张三的住院号是 12345",
+            "- OPENAI_API_KEY sk-abcdef1234567890",
+            "NONE",
+            "- 用户主要维护 BNCT TPS 的 C++ 工程",
+        ]
+        cleaned = sanitize_auto_memory_lines(lines)
+        self.assertEqual(len(cleaned), 2)
+        self.assertTrue(all("患者" not in line and "sk-" not in line for line in cleaned))
+
+    def test_auto_memory_merges_and_dedupes(self):
+        added = merge_auto_memory(self.data_dir, ["- 偏好中文回答", "- 偏好中文回答", "- 常用 VS2019 编译"])
+        self.assertEqual(added, 2)
+        again = merge_auto_memory(self.data_dir, ["- 偏好中文回答"])
+        self.assertEqual(again, 0)
+        content = read_auto_memory(self.data_dir)
+        self.assertIn("常用 VS2019 编译", content)
+
+
+if __name__ == "__main__":
+    unittest.main()

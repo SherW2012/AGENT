@@ -218,6 +218,10 @@
               <span>联网搜索</span>
               <small>自动搜索与审批策略</small>
             </button>
+            <button class="settings-tab" type="button" data-settings-section="memory">
+              <span>记忆</span>
+              <small>隐式记忆与清理</small>
+            </button>
           </nav>
 
           <form id="settings-form" class="settings-content">
@@ -317,6 +321,20 @@
                 </label>
               </fieldset>
               <p class="settings-help">默认建议使用 Auto：只有问题明显依赖近期公开信息时才会触发搜索；如果用户明确要求不联网，应遵循用户指令。</p>
+            </section>
+
+            <section class="settings-section" data-settings-section-panel="memory">
+              <div class="settings-section-heading">
+                <h3>隐式记忆</h3>
+                <p>开启后，Agent 会在日常对话结束后自动总结值得长期记住的稳定偏好和背景（存储在本机用户目录的 auto-memory.md，可随时查看）。显式记忆（明确让它“记住”的内容）不受此开关影响。</p>
+              </div>
+              <label class="toggle-row">
+                <input type="checkbox" id="auto-memory-toggle" />
+                <span><strong>允许从日常对话自动总结记忆</strong><small>确定性过滤器会拦截患者信息、密钥等敏感内容进入记忆。</small></span>
+              </label>
+              <div class="memory-actions">
+                <button class="secondary-button" id="clear-auto-memory-button" type="button">清空自动记忆</button>
+              </div>
             </section>
 
             <div class="modal-actions">

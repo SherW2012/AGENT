@@ -36,6 +36,7 @@ class Settings:
     interactive: bool = True
     web_search_mode: str = "auto"
     web_search_network: str = "auto"
+    auto_memory: bool = True
 
     @classmethod
     def load(
@@ -49,6 +50,7 @@ class Settings:
         interactive: bool = True,
         web_search_mode: str | None = None,
         web_search_network: str | None = None,
+        auto_memory: bool | None = None,
     ) -> "Settings":
         resolved_root = Path(root).expanduser().resolve()
         if not resolved_root.is_dir():
@@ -69,6 +71,8 @@ class Settings:
         configured_web_search_network = (web_search_network or os.getenv("BNCT_AGENT_WEB_SEARCH_NETWORK", "auto")).lower()
         if configured_web_search_network not in WEB_SEARCH_NETWORKS:
             raise ValueError("BNCT_AGENT_WEB_SEARCH_NETWORK must be one of: auto, direct, system")
+        if auto_memory is None:
+            auto_memory = os.getenv("BNCT_AGENT_AUTO_MEMORY", "1").strip().lower() not in {"0", "false", "off"}
 
         return cls(
             root=resolved_root,
@@ -87,4 +91,5 @@ class Settings:
             interactive=interactive,
             web_search_mode=configured_web_search_mode,
             web_search_network=configured_web_search_network,
+            auto_memory=bool(auto_memory),
         )
