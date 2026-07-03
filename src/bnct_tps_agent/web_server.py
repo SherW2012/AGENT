@@ -336,6 +336,13 @@ class ApplicationState:
                 self._events = self._events[-500:]
 
     def config(self) -> dict[str, Any]:
+        # Re-scan skill dirs so the panel always reflects the disk truth: skills
+        # removed or added outside the app (git pull, manual edits) show up on
+        # the next page refresh instead of requiring a service restart.
+        try:
+            self.skill_registry.refresh()
+        except Exception:
+            pass  # A malformed SKILL.md must not take down /api/config.
         return {
             "root": str(self.settings.root),
             "provider": self.settings.provider,

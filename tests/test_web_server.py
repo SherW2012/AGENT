@@ -382,6 +382,12 @@ class WebServerTests(unittest.TestCase):
         self.assertEqual(result["skill"]["name"], skill_name)
         self.assertIn(skill_name, {item["name"] for item in result["config"]["skills"]})
 
+        # Skills deleted on disk (e.g. by git pull) disappear on the next config
+        # fetch without a service restart.
+        shutil.rmtree(self.data_dir / "skills" / skill_name, ignore_errors=True)
+        refreshed = self._json("/api/config")
+        self.assertNotIn(skill_name, {item["name"] for item in refreshed["skills"]})
+
     def test_running_server_is_detected_for_single_instance_launch(self):
         self.assertTrue(existing_server_is_healthy("127.0.0.1", self.server.server_address[1]))
 
