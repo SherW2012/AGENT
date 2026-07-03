@@ -66,6 +66,21 @@ class SchedulesAndMemoryTests(unittest.TestCase):
         self.assertEqual(len(cleaned), 2)
         self.assertTrue(all("患者" not in line and "sk-" not in line for line in cleaned))
 
+    def test_session_summary_appears_in_recent_context(self):
+        store = SessionStore(self.data_dir)
+        session_id = store.create("长会话")["id"]
+        for index in range(12):
+            store.add_message(session_id, "user" if index % 2 == 0 else "assistant", f"消息 {index}")
+        store.set_summary(session_id, "用户在调试剂量模块，已完成编译配置。", 4)
+        context = store.recent_context(session_id, limit=4)
+        self.assertIn("更早对话的自动摘要", context)
+        self.assertIn("剂量模块", context)
+        self.assertIn("消息 11", context)
+        self.assertNotIn("消息 0", context)
+        # upto never regresses
+        store.set_summary(session_id, "新摘要", 2)
+        self.assertEqual(store.get(session_id)["summarizedUpTo"], 4)
+
     def test_auto_memory_merges_and_dedupes(self):
         added = merge_auto_memory(self.data_dir, ["- 偏好中文回答", "- 偏好中文回答", "- 常用 VS2019 编译"])
         self.assertEqual(added, 2)

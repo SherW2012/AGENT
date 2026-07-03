@@ -218,6 +218,19 @@ class WebServerTests(unittest.TestCase):
         favorites = {item["name"] for item in result["config"]["skills"] if item.get("favorite")}
         self.assertEqual(favorites, {"create-word", "create-ppt"})
 
+    def test_audit_endpoint_returns_recent_entries(self):
+        self.state.audit.record("unit_audit_probe", tool="web_search", risk="read")
+        result = self._json("/api/audit?limit=50")
+        events = [entry.get("event") for entry in result["entries"]]
+        self.assertIn("unit_audit_probe", events)
+
+    def test_config_exposes_usage_totals(self):
+        config = self._json("/api/config")
+        totals = config["usageTotals"]
+        self.assertIn("promptTokens", totals)
+        self.assertIn("completionTokens", totals)
+        self.assertIn("turns", totals)
+
     def test_steer_requires_a_running_task(self):
         with self.assertRaises(HTTPError) as context:
             self._post_json("/api/chat/steer", {"text": "补充一点"})

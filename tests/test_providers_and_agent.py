@@ -216,6 +216,22 @@ class ProviderAndAgentTests(unittest.TestCase):
         self.assertEqual(events[-1]["answer"], "流式")
         self.assertTrue(completions.requests[0]["stream"])
 
+    def test_stream_usage_is_reported_in_done_event(self):
+        chunks = [
+            SimpleNamespace(id="r", choices=[SimpleNamespace(delta=SimpleNamespace(content="好的"), finish_reason="stop")]),
+            SimpleNamespace(id="r", choices=[], usage=SimpleNamespace(prompt_tokens=120, completion_tokens=45)),
+        ]
+        completions = FakeStreamingCompletions([chunks])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        registry = FakeRegistry()
+        settings = Settings.load(self.root, provider="deepseek", api_key="test-key")
+        audit = AuditLogger(self.root / "tests" / "runtime_output" / "usage-audit")
+
+        events = list(AgentRuntime(settings, registry, audit, client=client).run_events("你好"))
+        done = events[-1]
+        self.assertEqual(done["usage"], {"promptTokens": 120, "completionTokens": 45})
+        self.assertTrue(completions.requests[0]["stream_options"]["include_usage"])
+
     def test_consecutive_reasoning_rounds_are_separated_by_blank_line(self):
         # Round 1: a thinking sentence + a tool call. Round 2: the final answer.
         round_one = [

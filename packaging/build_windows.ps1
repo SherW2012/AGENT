@@ -1,4 +1,4 @@
-﻿# Build a distributable Windows package of BNCT TPS Agent.
+\xef\xbb\xbf# Build a distributable Windows package of BNCT TPS Agent.
 #
 # Run this ON WINDOWS from the repository root:
 #   powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
@@ -65,5 +65,5 @@ if (Test-Path "dist\BNCT-Agent-win64.zip") { Remove-Item "dist\BNCT-Agent-win64.
 Compress-Archive -Path "dist\BNCT-Agent" -DestinationPath "dist\BNCT-Agent-win64.zip"
 
 Write-Host ""
-Write-Host "完成！分发文件: dist\BNCT-Agent-win64.zip" -ForegroundColor Green
-Write-Host "同事解压后双击 BNCT-Agent.exe 即可使用（无需安装 Python）。"
+Write-Host "Done. Output: dist\BNCT-Agent-win64.zip" -ForegroundColor Green
+Write-Host "Unzip and double-click BNCT-Agent.exe to run."

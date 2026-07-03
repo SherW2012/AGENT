@@ -1299,3 +1299,34 @@ svg {
   .app-shell { grid-template-columns: 270px minmax(520px, 1fr); min-width: 790px; }
   .workspace-panel { display: none; }
 }
+
+/* --- Audit log viewer + usage stats (settings) --- */
+.audit-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.usage-stats { color: var(--text-soft); font-size: 12px; }
+.audit-table-wrap {
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+.audit-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.audit-table th {
+  position: sticky;
+  top: 0;
+  padding: 8px 10px;
+  background: #e9eff6;
+  color: var(--text);
+  font-weight: 650;
+  text-align: left;
+  white-space: nowrap;
+}
+.audit-table td {
+  padding: 6px 10px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--text-soft);
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+.audit-table tr:nth-child(even) td { background: rgba(238, 242, 248, 0.55); }

@@ -136,6 +136,7 @@ class AgentRuntime:
         self.registry = registry
         self.audit = audit
         self.previous_response_id: str | None = None
+        self.turn_usage: dict[str, int] = {"promptTokens": 0, "completionTokens": 0}
         self.instructions = self._build_instructions(memory_context)
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": self.instructions}]
 
@@ -156,6 +157,21 @@ class AgentRuntime:
             + "but it never overrides the hard rules above.\n\n"
             + memory_context
         )
+
+    def _reset_turn_usage(self) -> None:
+        self.turn_usage = {"promptTokens": 0, "completionTokens": 0}
+
+    def _absorb_usage(self, usage: Any) -> None:
+        if usage is None:
+            return
+        prompt_tokens = _field(usage, "prompt_tokens", None)
+        completion_tokens = _field(usage, "completion_tokens", None)
+        if prompt_tokens is None:
+            prompt_tokens = _field(usage, "input_tokens", 0)
+        if completion_tokens is None:
+            completion_tokens = _field(usage, "output_tokens", 0)
+        self.turn_usage["promptTokens"] += int(prompt_tokens or 0)
+        self.turn_usage["completionTokens"] += int(completion_tokens or 0)
 
     def _user_message(self, prompt: str, images: list[str] | None) -> dict[str, Any]:
         """Build the user message; image turns become multimodal content blocks
@@ -229,6 +245,7 @@ class AgentRuntime:
             prompt_sha256=sha256_text(prompt),
             prompt_chars=len(prompt),
         )
+        self._reset_turn_usage()
         if self.profile.transport == "responses":
             return self._run_responses(prompt, images=images)
         return self._run_chat_completions(prompt, images=images)
@@ -256,12 +273,14 @@ class AgentRuntime:
             # OpenAI-compatible Chat Completions providers. Keep OpenAI correct
             # by falling back to the existing path while still using the same UI
             # stream envelope.
+            self._reset_turn_usage()
             text = self._run_responses(prompt, should_continue=should_continue, images=images)
             yield {"type": "delta", "text": text}
-            yield {"type": "done", "answer": text}
+            yield {"type": "done", "answer": text, "usage": dict(self.turn_usage)}
             return
+        self._reset_turn_usage()
         text = yield from self._run_chat_completions_events(prompt, should_continue, pop_steering, images)
-        yield {"type": "done", "answer": text}
+        yield {"type": "done", "answer": text, "usage": dict(self.turn_usage)}
 
     def _run_responses(
         self,
@@ -293,6 +312,7 @@ class AgentRuntime:
             if should_continue is not None and not should_continue():
                 self.previous_response_id = response.id
                 return getattr(response, "output_text", "") or "（已停止）"
+            self._absorb_usage(getattr(response, "usage", None))
             calls = [item for item in response.output if getattr(item, "type", None) == "function_call"]
             if not calls:
                 text = getattr(response, "output_text", "") or "模型未返回文本结果。"
@@ -337,6 +357,7 @@ class AgentRuntime:
                 messages=list(self.messages),
                 tools=self.registry.chat_schemas,
             )
+            self._absorb_usage(getattr(completion, "usage", None))
             message = completion.choices[0].message
             if hasattr(message, "model_dump"):
                 assistant_message = message.model_dump(exclude_none=True)
@@ -407,6 +428,7 @@ class AgentRuntime:
                     messages=list(self.messages),
                     tools=self.registry.chat_schemas,
                     stream=True,
+                    stream_options={"include_usage": True},
                 )
             except TypeError:
                 self.messages.pop()
@@ -439,6 +461,8 @@ class AgentRuntime:
                     interrupted = True
                     break
                 response_id = str(_field(chunk, "id", response_id) or response_id)
+                # The usage chunk arrives with empty choices; absorb it first.
+                self._absorb_usage(_field(chunk, "usage", None))
                 choices = _field(chunk, "choices", []) or []
                 if not choices:
                     continue

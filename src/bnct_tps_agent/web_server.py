@@ -366,6 +366,7 @@ class ApplicationState:
             "webSearchMode": self.settings.web_search_mode,
             "webSearchNetwork": self.settings.web_search_network,
             "autoMemory": self.settings.auto_memory,
+            "usageTotals": self.usage_totals(),
             "busy": self._chat_lock.locked(),
             "currentSessionId": self.current_session_id,
             "memory": memory_summary(self.settings.root),
@@ -597,8 +598,10 @@ class ApplicationState:
                         answer = "（已停止）"
                     self.sessions.add_message(self.current_session_id, "assistant", answer)
                     self.add_event({"type": "agent_stopped" if stopped else "agent_finished"})
+                    self._accumulate_usage(event.get("usage") if isinstance(event.get("usage"), dict) else None)
                     if not stopped:
                         self._spawn_auto_memorize(task, answer)
+                        self._spawn_context_compression(self.current_session_id)
                     yield {**event, "answer": answer, "stopped": stopped, "session": self.sessions.get(self.current_session_id)}
                 else:
                     yield event
@@ -661,6 +664,95 @@ class ApplicationState:
                 "approved": approved,
             }
         )
+
+    def _usage_path(self) -> Path:
+        return self.data_dir / "usage.json"
+
+    def usage_totals(self) -> dict[str, int]:
+        try:
+            payload = json.loads(self._usage_path().read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+        return {
+            "promptTokens": int(payload.get("promptTokens") or 0),
+            "completionTokens": int(payload.get("completionTokens") or 0),
+            "turns": int(payload.get("turns") or 0),
+        }
+
+    def _accumulate_usage(self, usage: dict[str, Any] | None) -> None:
+        if not isinstance(usage, dict):
+            return
+        prompt_tokens = int(usage.get("promptTokens") or 0)
+        completion_tokens = int(usage.get("completionTokens") or 0)
+        if prompt_tokens == 0 and completion_tokens == 0:
+            return
+        with self._state_lock:
+            totals = self.usage_totals()
+            totals["promptTokens"] += prompt_tokens
+            totals["completionTokens"] += completion_tokens
+            totals["turns"] += 1
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            self._usage_path().write_text(json.dumps(totals, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def read_audit_entries(self, limit: int = 200) -> dict[str, Any]:
+        entries: list[dict[str, Any]] = []
+        audit_dir = self.settings.audit_dir
+        files = sorted(audit_dir.glob("events-*.jsonl"), reverse=True) if audit_dir.is_dir() else []
+        for path in files:
+            try:
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            for line in reversed(lines):
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+                if len(entries) >= limit:
+                    return {"entries": entries, "files": len(files)}
+        return {"entries": entries, "files": len(files)}
+
+    CONTEXT_KEEP_RECENT = 8
+    CONTEXT_COMPRESS_BATCH = 6
+
+    def _spawn_context_compression(self, session_id: str) -> None:
+        """Rolling long-conversation compression: once enough messages fall out
+        of the verbatim window, fold them into the session summary in the
+        background so long sessions keep their memory."""
+        if self.runtime is None:
+            return
+        threading.Thread(target=self._compress_context, args=(session_id,), daemon=True).start()
+
+    def _compress_context(self, session_id: str) -> None:
+        try:
+            session = self.sessions.get(session_id)
+            messages = session.get("messages", [])
+            upto = int(session.get("summarizedUpTo") or 0)
+            cutoff = max(len(messages) - self.CONTEXT_KEEP_RECENT, 0)
+            if cutoff - upto < self.CONTEXT_COMPRESS_BATCH:
+                return
+            old_summary = str(session.get("summary") or "").strip()
+            transcript = "\n".join(
+                f"{message.get('role')}: {str(message.get('content') or '')[:800]}"
+                for message in messages[upto:cutoff]
+                if str(message.get("content") or "").strip()
+            )
+            prompt = (
+                "把下面的新增对话合并进已有摘要，输出一段不超过 300 字的中文摘要。"
+                "必须保留：用户的长期目标、已完成的事项、关键决定、尚未解决的问题。"
+                "只输出摘要正文，不要任何前后缀。\n\n"
+                f"已有摘要：{old_summary or '（无）'}\n\n新增对话：\n{transcript[:6000]}"
+            )
+            completion = self.runtime.client.chat.completions.create(
+                model=self.settings.model,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            summary = str(completion.choices[0].message.content or "").strip()
+            if summary:
+                self.sessions.set_summary(session_id, summary, cutoff)
+                self.audit.record("context_compressed", session=session_id, upto=cutoff)
+        except Exception:
+            pass  # Compression is best-effort; the verbatim window still works.
 
     def _spawn_auto_memorize(self, task: str, answer: str) -> None:
         """Implicit memory, Claude-style: after a completed turn, a background
@@ -871,6 +963,9 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(self.server.state.list_sessions(query_text))
             elif parsed.path == "/api/schedules":
                 self._send_json(list_schedules(self.server.state.data_dir))
+            elif parsed.path == "/api/audit":
+                limit = min(max(int(query.get("limit", [200])[0]), 1), 1000)
+                self._send_json(self.server.state.read_audit_entries(limit))
             elif parsed.path == "/api/session":
                 session_id = str(query.get("id", [""])[0]) or None
                 self._send_json(self.server.state.get_session(session_id))

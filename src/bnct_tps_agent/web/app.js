@@ -101,6 +101,9 @@ const elements = {
   uiBlocker: document.querySelector("#ui-blocker"),
   uiBlockerLabel: document.querySelector("#ui-blocker-label"),
   toastStack: document.querySelector("#toast-stack"),
+  auditTbody: document.querySelector("#audit-tbody"),
+  refreshAudit: document.querySelector("#refresh-audit-button"),
+  usageStats: document.querySelector("#usage-stats"),
   autoMemoryToggle: document.querySelector("#auto-memory-toggle"),
   clearAutoMemory: document.querySelector("#clear-auto-memory-button"),
   webSearchInputs: document.querySelectorAll('input[name="web-search-mode"]'),
@@ -201,6 +204,28 @@ async function streamApi(path, payload, onEvent, signal) {
     }
     onEvent(event);
   }
+}
+
+function ensureNotificationPermission() {
+  // Win11 shows browser Notifications as native toasts in the notification
+  // center; 127.0.0.1 counts as a secure context so this works out of the box.
+  if (!("Notification" in window)) return;
+  if (Notification.permission === "default") {
+    Notification.requestPermission().catch(() => {});
+  }
+}
+
+function notifySystem(title, body) {
+  try {
+    if ("Notification" in window && Notification.permission === "granted") {
+      const notice = new Notification(title, { body });
+      notice.onclick = () => window.focus();
+      return true;
+    }
+  } catch (_error) {
+    // Fall through to the in-page toast.
+  }
+  return false;
 }
 
 function showToast(message, kind = "info") {
@@ -899,7 +924,12 @@ function renderActivity() {
 function finalizeAssistantDraft(rawText = "", options = {}) {
   if (!state.activeDraft) return;
   const draft = state.activeDraft;
-  draft.meta.textContent = options.stopped ? "BNCT Agent · 已停止" : "BNCT Agent";
+  let metaText = options.stopped ? "BNCT Agent · 已停止" : "BNCT Agent";
+  const usage = options.usage;
+  if (usage && (usage.promptTokens || usage.completionTokens)) {
+    metaText += ` · ↑${usage.promptTokens} ↓${usage.completionTokens} tokens`;
+  }
+  draft.meta.textContent = metaText;
   setActivity("agent", options.stopped ? "已停止" : "已完成", options.stopped ? "failed" : "done");
   draft.activity.classList.add("done");
   if (options.stopped) draft.activity.classList.add("failed");
@@ -1747,6 +1777,7 @@ async function sendTask(prefilled = null) {
   // Remember the submission so a Stop can restore it for editing and resending.
   state.lastSubmission = { typed: typedTask, prefilled, attachments };
   state.stickToBottom = true;
+  ensureNotificationPermission();
   appendMessage("user", task, { attachments: attachmentMetadata, withActions: true });
   appendAssistantDraft();
   if (state.activeDraft) state.activeDraft.task = task;
@@ -1795,7 +1826,7 @@ async function sendTask(prefilled = null) {
           if (event.session) {
             state.currentSessionId = event.session.id;
           }
-          finalizeAssistantDraft(answerText, { stopped });
+          finalizeAssistantDraft(answerText, { stopped, usage: event.usage });
           if (stopped) restoreLastSubmission();
         }
       },
@@ -1903,11 +1934,15 @@ function handleServerEvent(event) {
     setActivity("steer", "已收到补充引导，下一轮生效", "done");
   }
   if (event.type === "schedule_finished") {
-    showToast("定时任务已执行完成，结果保存在新会话中。");
+    if (!notifySystem("BNCT Agent · 定时任务完成", `${event.prompt || "任务"} 已执行，结果保存在新会话中。`)) {
+      showToast("定时任务已执行完成，结果保存在新会话中。");
+    }
     loadSessions().catch(() => {});
   }
   if (event.type === "schedule_skipped") {
-    showToast(`定时任务已跳过：${event.reason || ""}`, "error");
+    if (!notifySystem("BNCT Agent · 定时任务已跳过", event.reason || "")) {
+      showToast(`定时任务已跳过：${event.reason || ""}`, "error");
+    }
   }
   if (event.type === "skill_imported" || event.type === "skill_deleted") {
     // A skill was created/installed/removed mid-session (possibly by the agent
@@ -1968,6 +2003,39 @@ async function resolveApproval(approved) {
   }
 }
 
+function renderUsageTotals() {
+  const totals = state.config?.usageTotals;
+  if (!totals) return;
+  elements.usageStats.textContent =
+    `累计用量：输入 ${totals.promptTokens.toLocaleString()} · 输出 ${totals.completionTokens.toLocaleString()} tokens · ${totals.turns} 轮`;
+}
+
+async function loadAudit() {
+  elements.auditTbody.replaceChildren();
+  try {
+    const result = await api("/api/audit?limit=200");
+    (result.entries || []).forEach((entry) => {
+      const row = document.createElement("tr");
+      const cells = [
+        String(entry.timestamp || "").slice(0, 19).replace("T", " "),
+        String(entry.event || ""),
+        String(entry.tool || ""),
+        String(entry.risk || ""),
+        entry.ok === false ? (entry.error_type || "失败") : entry.ok === true ? "成功" : "",
+      ];
+      cells.forEach((text) => {
+        const td = document.createElement("td");
+        td.textContent = text;
+        row.append(td);
+      });
+      elements.auditTbody.append(row);
+    });
+    renderUsageTotals();
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
 function switchSettingsSection(section) {
   const target = section || "connection";
   elements.settingsTabs.forEach((tab) => {
@@ -1976,6 +2044,7 @@ function switchSettingsSection(section) {
   elements.settingsSections.forEach((panel) => {
     panel.classList.toggle("is-active", panel.dataset.settingsSectionPanel === target);
   });
+  if (target === "audit") loadAudit();
 }
 
 function openSettings(section = "connection") {
@@ -2197,6 +2266,7 @@ function bindEvents() {
   elements.fileSearch.addEventListener("input", () => renderFiles(elements.fileSearch.value));
   elements.sessionSearch.addEventListener("input", () => loadSessions(elements.sessionSearch.value));
   elements.settingsButton.addEventListener("click", () => openSettings());
+  elements.refreshAudit.addEventListener("click", loadAudit);
   elements.clearAutoMemory.addEventListener("click", async () => {
     if (!window.confirm("清空自动总结的隐式记忆？显式记忆不受影响。")) return;
     try {

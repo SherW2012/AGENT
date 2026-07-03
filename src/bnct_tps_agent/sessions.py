@@ -58,6 +58,8 @@ class SessionStore:
         payload.setdefault("updatedAt", payload["createdAt"])
         payload.setdefault("favorite", False)
         payload.setdefault("messages", [])
+        payload.setdefault("summary", "")
+        payload.setdefault("summarizedUpTo", 0)
         return payload
 
     def all_sessions(self) -> list[dict[str, Any]]:
@@ -182,6 +184,9 @@ class SessionStore:
             return message
 
     def recent_context(self, session_id: str, limit: int = 8) -> str:
+        """Rolling context: an auto-compressed summary of the older part of the
+        conversation plus the most recent messages verbatim, so long sessions
+        keep their memory without unbounded prompt growth."""
         session = self.get(session_id)
         messages = session.get("messages", [])[-limit:]
         lines = []
@@ -190,4 +195,17 @@ class SessionStore:
             content = str(message.get("content") or "").strip()
             if content:
                 lines.append(f"{role}: {content[:1600]}")
-        return "\n\n".join(lines)
+        parts: list[str] = []
+        summary = str(session.get("summary") or "").strip()
+        if summary:
+            parts.append("【更早对话的自动摘要】\n" + summary)
+        if lines:
+            parts.append("\n\n".join(lines))
+        return "\n\n---\n\n".join(parts)
+
+    def set_summary(self, session_id: str, summary: str, upto: int) -> None:
+        with self._write_lock:
+            session = self.get(session_id)
+            session["summary"] = str(summary or "").strip()[:2400]
+            session["summarizedUpTo"] = max(int(upto), int(session.get("summarizedUpTo") or 0))
+            self._write(session)
