@@ -16,9 +16,12 @@ MAX_FAVORITE_SKILLS = 7
 SKILL_ROOTS = ("skills", ".agent/skills", ".claude/skills")
 # Skills shipped with the app live next to the package (repo_root/skills) and are
 # discovered regardless of which working directory is open, so the skill set does
-# not change when the workspace changes. See requirement: skills and workspace are
-# independent systems.
-APP_SKILLS_DIR = (Path(__file__).resolve().parents[2] / "skills").resolve()
+# not change when the workspaces changes. In a frozen (PyInstaller) build the
+# bundled skills sit next to the executable instead of the source tree.
+if getattr(sys, "frozen", False):
+    APP_SKILLS_DIR = (Path(sys.executable).resolve().parent / "skills").resolve()
+else:
+    APP_SKILLS_DIR = (Path(__file__).resolve().parents[2] / "skills").resolve()
 MAX_SKILL_TEXT_CHARS = 24_000
 SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
 IMPORT_IGNORES = shutil.ignore_patterns(".git", ".venv", "__pycache__", "*.pyc", ".bnct_agent")

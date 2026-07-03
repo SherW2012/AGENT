@@ -220,6 +220,20 @@ SKILL.md 并调用 `create_agent_skill`（写入类，需审批）。新 skill �
 
 和模型对话本身只访问所选供应商的 API 域名：DeepSeek、Kimi/Moonshot 在中国大陆通常无需 VPN；OpenAI 一般需要。换言之，不用 VPN 时，把供应商切到 DeepSeek 或 Kimi 即可正常对话。联网搜索默认走 Bing，同样无需 VPN；若本机配置了代理（如对话用的 VPN 代理）导致搜索异常，可在设置页把“网络通道”切到 `Direct` 绕过本机代理。
 
+## 打包分发（给同事的成品包）
+
+在 Windows 上、仓库根目录执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
+```
+
+产物是 `dist\BNCT-Agent-win64.zip`：同事解压后**双击 `BNCT-Agent.exe` 即可使用，
+无需安装 Python**（PyInstaller 已把运行时打进包里）。包内含全部出厂 skill、示例数据
+和《使用说明.txt》；默认工作目录是包内的 `workspace\`，每个人的会话/记忆/定时任务存
+在各自的 `%USERPROFILE%\.bnct_agent\`。同事只需要自备模型 API Key（设置页填入）。
+注意 PyInstaller 不能跨平台构建，Windows 包必须在 Windows 上打。
+
 ## 快速开始
 
 ```powershell
