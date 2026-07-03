@@ -280,6 +280,7 @@ class ApplicationState:
         self.current_session_id = self.sessions.current_id()
         self.skill_registry = SkillRegistry(self.settings.root, self.data_dir)
         self._interrupt = threading.Event()
+        self._steering: list[str] = []
         self._credentials: dict[str, str] = {}
         if self.settings.api_key:
             self._credentials[self.settings.provider] = self.settings.api_key
@@ -373,6 +374,25 @@ class ApplicationState:
         self._interrupt.set()
         self.add_event({"type": "agent_stop_requested"})
         return {"ok": True}
+
+    def steer(self, text: str) -> dict[str, Any]:
+        """Queue mid-task user guidance; the agent loop injects it before the
+        next reasoning round instead of rejecting it as '已有任务正在执行'."""
+        clean = str(text or "").strip()
+        if not clean:
+            raise ValueError("补充内容不能为空")
+        if not self._chat_lock.locked():
+            raise RuntimeError("当前没有正在执行的任务，请直接发送新消息")
+        with self._state_lock:
+            self._steering.append(clean)
+        self.sessions.add_message(self.current_session_id, "user", clean)
+        self.add_event({"type": "steer_received"})
+        return {"ok": True}
+
+    def _pop_steering(self) -> list[str]:
+        with self._state_lock:
+            items, self._steering = self._steering, []
+        return items
 
     def configure(self, payload: dict[str, Any]) -> dict[str, Any]:
         if self._chat_lock.locked():
@@ -526,11 +546,15 @@ class ApplicationState:
             effective_task = build_task_prompt(task, history, prompt_attachments)
             self.sessions.add_message(self.current_session_id, "user", task, stored_attachments)
             self._interrupt.clear()
+            with self._state_lock:
+                self._steering.clear()
             self.add_event({"type": "agent_started"})
             answer = ""
             emitted_done = False
             for event in self.runtime.run_events(
-                effective_task, should_continue=lambda: not self._interrupt.is_set()
+                effective_task,
+                should_continue=lambda: not self._interrupt.is_set(),
+                pop_steering=self._pop_steering,
             ):
                 event_type = str(event.get("type") or "")
                 if event_type == "delta":
@@ -777,6 +801,8 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(self.server.state.delete_skill(str(payload.get("name") or "")))
             elif parsed.path == "/api/chat/stop":
                 self._send_json(self.server.state.stop())
+            elif parsed.path == "/api/chat/steer":
+                self._send_json(self.server.state.steer(str(payload.get("text") or "")))
             elif parsed.path == "/api/chat":
                 self._send_json(
                     self.server.state.chat(

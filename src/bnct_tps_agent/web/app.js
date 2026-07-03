@@ -221,7 +221,11 @@ function setBusy(busy) {
   elements.send.classList.toggle("is-busy", busy);
   elements.send.setAttribute("aria-label", busy ? "停止生成" : "发送任务");
   elements.send.title = busy ? "停止生成" : "";
-  elements.prompt.disabled = busy;
+  // The prompt stays usable while the agent works: Enter sends mid-task
+  // guidance that the agent picks up before its next reasoning round.
+  elements.prompt.placeholder = busy
+    ? "任务进行中——输入补充引导，回车立即传给 Agent..."
+    : "给 BNCT Agent 一个任务...";
   elements.attachButton.disabled = busy;
   if (busy) {
     setConnection("busy", "Agent 工作中");
@@ -1084,9 +1088,21 @@ async function loadCurrentSession(sessionId = state.currentSessionId) {
   renderConversation(result.session);
 }
 
+let uiBlockerTimer = null;
+
 function setUiBlocked(blocked, label = "处理中…") {
-  elements.uiBlockerLabel.textContent = label;
-  elements.uiBlocker.classList.toggle("hidden", !blocked);
+  // Show the overlay only if the operation is actually slow; fast session
+  // switches finish inside the delay and never flash the screen.
+  window.clearTimeout(uiBlockerTimer);
+  uiBlockerTimer = null;
+  if (blocked) {
+    uiBlockerTimer = window.setTimeout(() => {
+      elements.uiBlockerLabel.textContent = label;
+      elements.uiBlocker.classList.remove("hidden");
+    }, 300);
+  } else {
+    elements.uiBlocker.classList.add("hidden");
+  }
 }
 
 async function selectSession(sessionId) {
@@ -1754,6 +1770,23 @@ async function sendTask(prefilled = null) {
   }
 }
 
+async function sendSteer() {
+  const text = elements.prompt.value.trim();
+  if (!text || !state.busy) return;
+  elements.prompt.value = "";
+  resizePrompt();
+  appendMessage("user", text, { withActions: true });
+  try {
+    await api("/api/chat/steer", {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    });
+    showToast("已把补充引导交给正在执行的任务，将在下一轮生效。");
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
 function stopTask() {
   if (!state.busy) return;
   state.stopped = true;
@@ -1805,6 +1838,9 @@ function handleServerEvent(event) {
   }
   if (event.type === "agent_stopped") {
     setActivity("agent", "已停止", "failed");
+  }
+  if (event.type === "steer_received") {
+    setActivity("steer", "已收到补充引导，下一轮生效", "done");
   }
   if (event.type === "skill_imported" || event.type === "skill_deleted") {
     // A skill was created/installed/removed mid-session (possibly by the agent
@@ -2083,7 +2119,8 @@ function bindEvents() {
   elements.prompt.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      sendTask();
+      if (state.busy) sendSteer();
+      else sendTask();
     }
   });
   elements.attachButton.addEventListener("click", () => elements.attachmentInput.click());

@@ -169,6 +169,50 @@ class ProviderAndAgentTests(unittest.TestCase):
         # The stored answer stays clean (no leading separator).
         self.assertEqual(events[-1]["answer"], "查完了")
 
+    def test_mid_task_steering_is_injected_before_next_round(self):
+        round_one = [
+            SimpleNamespace(
+                id="r",
+                choices=[SimpleNamespace(
+                    delta=SimpleNamespace(
+                        content=None,
+                        tool_calls=[SimpleNamespace(
+                            index=0,
+                            id="call-1",
+                            type="function",
+                            function=SimpleNamespace(name="list_project_files", arguments='{"pattern":"*","limit":3}'),
+                        )],
+                    ),
+                    finish_reason="tool_calls",
+                )],
+            ),
+        ]
+        round_two = [
+            SimpleNamespace(id="r", choices=[SimpleNamespace(delta=SimpleNamespace(content="收到"), finish_reason="stop")]),
+        ]
+        completions = FakeStreamingCompletions([round_one, round_two])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        registry = FakeRegistry()
+        settings = Settings.load(self.root, provider="deepseek", api_key="test-key")
+        audit = AuditLogger(self.root / "tests" / "runtime_output" / "provider-steer-audit")
+
+        queue = ["顺便只看 src 目录"]
+
+        def pop_steering():
+            items, queue[:] = list(queue), []
+            return items
+
+        # Steering queued before round 2 must appear in round 2's request messages.
+        events = list(
+            AgentRuntime(settings, registry, audit, client=client).run_events(
+                "检查工程", pop_steering=pop_steering
+            )
+        )
+        self.assertEqual(events[-1]["answer"], "收到")
+        second_request_messages = completions.requests[1]["messages"]
+        steer_texts = [m["content"] for m in second_request_messages if m.get("role") == "user"]
+        self.assertTrue(any("顺便只看 src 目录" in str(text) for text in steer_texts))
+
 
 if __name__ == "__main__":
     unittest.main()

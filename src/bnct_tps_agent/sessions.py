@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -30,6 +31,9 @@ class SessionStore:
         self.sessions_dir = self.base / "sessions"
         self.current_path = self.base / "current-session"
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        # add_message is read-modify-write; mid-task steering can append from an
+        # HTTP thread while the chat thread appends the answer.
+        self._write_lock = threading.Lock()
 
     def _path(self, session_id: str) -> Path:
         if not session_id or any(ch not in "0123456789abcdef" for ch in session_id):
@@ -157,21 +161,22 @@ class SessionStore:
         content: str,
         attachments: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        session = self.get(session_id)
-        message = {
-            "id": uuid.uuid4().hex,
-            "role": role,
-            "content": content,
-            "createdAt": now_iso(),
-            "attachments": attachments or [],
-        }
-        session["messages"].append(message)
-        session["updatedAt"] = message["createdAt"]
-        if role == "user" and (not session.get("title") or session.get("title") == "新会话"):
-            compact = " ".join(content.strip().split())
-            session["title"] = compact[:MAX_TITLE_CHARS] or "新会话"
-        self._write(session)
-        return message
+        with self._write_lock:
+            session = self.get(session_id)
+            message = {
+                "id": uuid.uuid4().hex,
+                "role": role,
+                "content": content,
+                "createdAt": now_iso(),
+                "attachments": attachments or [],
+            }
+            session["messages"].append(message)
+            session["updatedAt"] = message["createdAt"]
+            if role == "user" and (not session.get("title") or session.get("title") == "新会话"):
+                compact = " ".join(content.strip().split())
+                session["title"] = compact[:MAX_TITLE_CHARS] or "新会话"
+            self._write(session)
+            return message
 
     def recent_context(self, session_id: str, limit: int = 8) -> str:
         session = self.get(session_id)

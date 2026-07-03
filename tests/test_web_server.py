@@ -218,6 +218,11 @@ class WebServerTests(unittest.TestCase):
         favorites = {item["name"] for item in result["config"]["skills"] if item.get("favorite")}
         self.assertEqual(favorites, {"create-word", "debug"})
 
+    def test_steer_requires_a_running_task(self):
+        with self.assertRaises(HTTPError) as context:
+            self._post_json("/api/chat/steer", {"text": "补充一点"})
+        self.assertEqual(context.exception.code, 409)
+
     def test_batch_session_delete(self):
         first = self._post_json("/api/sessions", {})["session"]["id"]
         second = self._post_json("/api/sessions", {})["session"]["id"]

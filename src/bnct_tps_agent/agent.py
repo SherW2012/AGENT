@@ -186,6 +186,7 @@ class AgentRuntime:
         self,
         prompt: str,
         should_continue: "Callable[[], bool] | None" = None,
+        pop_steering: "Callable[[], list[str]] | None" = None,
     ) -> Iterator[dict[str, Any]]:
         if not prompt.strip():
             raise ValueError("任务不能为空")
@@ -207,7 +208,7 @@ class AgentRuntime:
             yield {"type": "delta", "text": text}
             yield {"type": "done", "answer": text}
             return
-        text = yield from self._run_chat_completions_events(prompt, should_continue)
+        text = yield from self._run_chat_completions_events(prompt, should_continue, pop_steering)
         yield {"type": "done", "answer": text}
 
     def _run_responses(self, prompt: str, should_continue: Callable[[], bool] | None = None) -> str:
@@ -311,9 +312,13 @@ class AgentRuntime:
         raise RuntimeError("超过最大工具调用轮数，已停止以避免失控循环")
 
     def _run_chat_completions_events(
-        self, prompt: str, should_continue: Callable[[], bool] | None = None
+        self,
+        prompt: str,
+        should_continue: Callable[[], bool] | None = None,
+        pop_steering: Callable[[], list[str]] | None = None,
     ) -> Iterator[dict[str, Any]]:
         alive = should_continue if should_continue is not None else (lambda: True)
+        drain_steering = pop_steering if pop_steering is not None else (lambda: [])
         self.messages.append({"role": "user", "content": prompt})
         # Separate consecutive reasoning rounds (each round = some thinking text
         # followed by tool calls) with a blank line in the streamed output, so the
@@ -323,6 +328,10 @@ class AgentRuntime:
             if not alive():
                 self.messages.append({"role": "assistant", "content": "（已停止）"})
                 return "（已停止）"
+            # Mid-task user guidance lands between reasoning rounds: inject it as
+            # a user message so the next model call sees it before continuing.
+            for note in drain_steering():
+                self.messages.append({"role": "user", "content": f"[用户在任务执行中补充的指导，请立即结合执行]\n{note}"})
             try:
                 completion_stream = self.client.chat.completions.create(
                     model=self.settings.model,
