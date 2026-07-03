@@ -1220,17 +1220,39 @@ function skillTone(skill, index) {
   return ["violet", "green", "accent", "red"][index % 4];
 }
 
-// Imported skills without an `icon:` frontmatter entry get a stable preset
-// icon picked by name hash; built-in skills declare their own.
-const SKILL_PRESET_ICONS = ["🧩", "⚙️", "🛠️", "🧪", "📐", "🗂️", "💡", "🔧"];
+// Claude-style minimal line icons (24x24 stroke paths, currentColor). A skill's
+// `icon:` frontmatter can name one of these presets; an emoji still works as a
+// custom escape hatch; skills with neither get a stable preset by name hash.
+const SKILL_ICON_PATHS = {
+  doc: ["M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z", "M14 3v5h5", "M9 13h6", "M9 17h4"],
+  table: ["M4 5.5h16v13H4z", "M4 10h16", "M10.5 10v8.5"],
+  slides: ["M3.5 4.5h17v11h-17z", "M12 15.5V19", "M8 19.5h8", "m8 12 2.5-3 2 2L16 7.5"],
+  hammer: ["m15 12-8.4 8.4a2.1 2.1 0 0 1-3-3L12 9", "m18 15 4-4", "m21.5 11.5-1.9-1.9A2 2 0 0 1 19 8.2V7l-2.3-2.3a6 6 0 0 0-4.2-1.7L9 3l.9.8A6.2 6.2 0 0 1 12 8.4V10l2 2h1.2a2 2 0 0 1 1.4.6l1.9 1.9"],
+  package: ["M21 8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7Z", "m3.3 7 8.7 5 8.7-5", "M12 22V12"],
+  diagnose: ["M11 17a6 6 0 1 0 0-12 6 6 0 0 0 0 12Z", "m16 16 4.5 4.5", "M8.5 11h1.2l.9-1.8 1.4 3.6.9-1.8h1.6"],
+  scan: ["M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z", "M6.5 12h3l1.5-3 2 6 1.5-3h3"],
+  gear: ["M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z", "M12 2v3", "M12 19v3", "M2 12h3", "M19 12h3", "m4.9 4.9 2.1 2.1", "m17 17 2.1 2.1", "m4.9 19.1 2.1-2.1", "m17 7 2.1-2.1"],
+  bolt: ["M13 2 4.5 13.5h6L11 22l8.5-11.5h-6L13 2Z"],
+  flask: ["M9 3h6", "M10 3v6L4.7 18a2 2 0 0 0 1.8 3h11a2 2 0 0 0 1.8-3L14 9V3", "M7.5 15h9"],
+  ruler: ["M3 17 17 3l4 4L7 21l-4-4Z", "m8 16 1.5 1.5", "m11 13 1.5 1.5", "m14 10 1.5 1.5"],
+  bulb: ["M9 18h6", "M10 21h4", "M12 3a6 6 0 0 0-3.5 10.9c.7.5 1.2 1.3 1.4 2.1h4.2c.2-.8.7-1.6 1.4-2.1A6 6 0 0 0 12 3Z"],
+  folder: ["M3.5 6.5h6l2 2h9v10h-17z"],
+};
+const SKILL_FALLBACK_ICONS = ["gear", "bolt", "flask", "ruler", "bulb", "folder"];
 
-function skillIcon(skill) {
+function skillIconElement(skill) {
   const custom = String(skill.icon || "").trim();
-  if (custom) return custom;
+  if (custom && SKILL_ICON_PATHS[custom]) {
+    return svgIcon(SKILL_ICON_PATHS[custom]);
+  }
+  if (custom && !/^[a-z][a-z0-9-]*$/.test(custom)) {
+    // Emoji or other literal glyph declared by the skill author.
+    return document.createTextNode(custom);
+  }
   const name = String(skill.name || "?");
   let hash = 0;
   for (let i = 0; i < name.length; i += 1) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
-  return SKILL_PRESET_ICONS[hash % SKILL_PRESET_ICONS.length];
+  return svgIcon(SKILL_ICON_PATHS[SKILL_FALLBACK_ICONS[hash % SKILL_FALLBACK_ICONS.length]]);
 }
 
 function stageSkillPrompt(skill) {
@@ -1263,12 +1285,15 @@ function stageSkillPrompt(skill) {
 function skillSubtitle(skill) {
   const text = String(skill.shortDescription || skill.description || "").trim();
   if (!text) return "本地 skill";
-  // One concise sentence; the panel keeps subtitles to a single line.
-  const firstSentence = text.split(/(?<=[。.!?！？])\s*/)[0].trim() || text;
+  // One concise sentence. Split only on CJK/full sentence enders -- a plain
+  // Latin "." must NOT split, or "生成 .xlsx 表格" collapses to "生成 .".
+  const firstSentence = text.split(/(?<=[。！？!?])\s*/)[0].trim() || text;
   return firstSentence.length > 40 ? `${firstSentence.slice(0, 40)}…` : firstSentence;
 }
 
 function buildSkillRow(skill, index) {
+  // Panel rows are launch-only; deletion lives in the "全部" grid dialog to
+  // keep a single management entry point.
   const row = document.createElement("div");
   row.className = "skill-row";
   const button = document.createElement("button");
@@ -1277,29 +1302,19 @@ function buildSkillRow(skill, index) {
   button.title = `${skill.displayName || skill.name}\n${skill.description || ""}`;
   const icon = document.createElement("span");
   icon.className = `skill-icon ${skillTone(skill, index)}`;
-  icon.textContent = skillIcon(skill);
+  icon.replaceChildren(skillIconElement(skill));
   const copy = document.createElement("span");
   copy.className = "skill-copy";
   const title = document.createElement("strong");
   title.textContent = (skill.displayName || skill.name) + (skill.interaction === "direct" ? " ⚡" : "");
   const subtitle = document.createElement("small");
-  subtitle.textContent = skillSubtitle(skill);
+  const subtitleText = skillSubtitle(skill);
+  subtitle.textContent = subtitleText;
+  subtitle.title = String(skill.shortDescription || skill.description || subtitleText);
   copy.append(title, subtitle);
   button.append(icon, copy);
   button.addEventListener("click", () => stageSkillPrompt(skill));
   row.append(button);
-  if (skill.removable) {
-    const remove = document.createElement("button");
-    remove.className = "skill-delete";
-    remove.type = "button";
-    remove.title = "删除该 skill";
-    remove.textContent = "×";
-    remove.addEventListener("click", (event) => {
-      event.stopPropagation();
-      deleteSkillUi(skill.name);
-    });
-    row.append(remove);
-  }
   return row;
 }
 
@@ -1340,7 +1355,7 @@ function renderSkillsGrid() {
     tile.title = `${skill.displayName || skill.name}\n${skill.description || ""}`;
     const icon = document.createElement("span");
     icon.className = `skill-tile-icon ${skillTone(skill, index)}`;
-    icon.textContent = skillIcon(skill);
+    icon.replaceChildren(skillIconElement(skill));
     const name = document.createElement("span");
     name.className = "skill-tile-name";
     name.textContent = skill.displayName || skill.name;
@@ -1732,6 +1747,22 @@ async function sendTask(prefilled = null) {
   setBusy(true);
   let answerText = "";
   let completed = false;
+  // Smooth typewriter: providers like Kimi emit bursty chunks with long gaps,
+  // which looks like stuttering. Buffer arrivals and drain at a steady cadence
+  // (draining faster when the backlog grows so we never fall behind).
+  let displayedText = "";
+  let pendingText = "";
+  const smoothTimer = window.setInterval(() => {
+    if (!pendingText) return;
+    const step = Math.max(4, Math.ceil(pendingText.length / 10));
+    displayedText += pendingText.slice(0, step);
+    pendingText = pendingText.slice(step);
+    setDraftText(displayedText);
+  }, 33);
+  const flushSmooth = () => {
+    displayedText += pendingText;
+    pendingText = "";
+  };
   try {
     await streamApi(
       "/api/chat-stream",
@@ -1743,12 +1774,13 @@ async function sendTask(prefilled = null) {
       (event) => {
         if (event.type === "delta") {
           answerText += event.text || "";
-          setDraftText(answerText);
+          pendingText += event.text || "";
         } else if (event.type === "notice") {
           showToast(event.message || "任务提示", "error");
           setActivity("notice", event.message || "任务提示", "failed");
         } else if (event.type === "done") {
           completed = true;
+          flushSmooth();
           const stopped = Boolean(event.stopped) || state.stopped;
           answerText = event.answer || answerText || "模型未返回文本结果。";
           setDraftText(answerText);
@@ -1762,11 +1794,14 @@ async function sendTask(prefilled = null) {
       state.abortController.signal,
     );
     if (!completed) {
+      flushSmooth();
       setDraftText(answerText || "模型未返回文本结果。");
       finalizeAssistantDraft(answerText);
     }
     await loadSessions();
   } catch (error) {
+    flushSmooth();
+    if (answerText) setDraftText(answerText);
     if (error.name === "AbortError" || state.stopped) {
       finalizeAssistantDraft(answerText, { stopped: true });
       restoreLastSubmission();
@@ -1781,6 +1816,7 @@ async function sendTask(prefilled = null) {
       appendMessage("system", `任务失败：${error.message}`);
     }
   } finally {
+    window.clearInterval(smoothTimer);
     state.abortController = null;
     setBusy(false);
   }

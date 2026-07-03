@@ -2,7 +2,7 @@
 name: tps-build-diagnose
 description: Analyze an existing build log without running a build - cluster the errors, rank probable root causes, and suggest where in the project to look. Use when the user has a build log file or pasted build output to diagnose.
 version: 0.1.0
-icon: "🧭"
+icon: "diagnose"
 display_name: "编译日志诊断"
 short_description: "分析已有编译日志，聚类错误并定位根因。"
 default_prompt: "使用 tps-build-diagnose skill 分析编译日志，聚类错误、排序根因并给出定位建议。"

@@ -2,7 +2,7 @@
 name: tps-build-release
 description: Run the user's configured TPS Release build script, verify it completed cleanly, and flag release risks such as errors, unusual warning growth, or missing artifacts. Use when the user asks to build/compile the TPS project in Release.
 version: 0.1.0
-icon: "📦"
+icon: "package"
 display_name: "TPS Release 编译"
 short_description: "一键 Release 编译并提示发布风险。"
 default_prompt: "运行一次 TPS Release 编译，检查是否成功并提示发布相关风险。"

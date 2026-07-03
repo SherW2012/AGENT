@@ -2,7 +2,7 @@
 name: create-excel
 description: Generate an Excel (.xlsx) workbook in the workspace from one or more sheets of rows and cells. Use when the user asks to create, export, or write an Excel spreadsheet, table, or .xlsx file.
 version: 0.1.0
-icon: "📊"
+icon: "table"
 display_name: "Excel 表格"
 short_description: "生成 .xlsx Excel 表格。"
 default_prompt: "使用 create-excel skill 生成一个 Excel 表格：先确认文件名、各工作表名称和表头与数据行，再写入工作目录。"

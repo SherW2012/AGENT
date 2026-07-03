@@ -2,7 +2,7 @@
 name: tps-build-debug
 description: Run the user's configured TPS Debug build script, watch the log, extract the real errors from the warning noise, and estimate where in the project each error originates. Use when the user asks to build/compile the TPS project in Debug.
 version: 0.1.0
-icon: "🔨"
+icon: "hammer"
 display_name: "TPS Debug 编译"
 short_description: "一键 Debug 编译并定位错误。"
 default_prompt: "运行一次 TPS Debug 编译，失败时提取关键错误并预估源码位置。"

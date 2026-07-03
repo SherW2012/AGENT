@@ -813,7 +813,8 @@ svg {
   display: grid;
   gap: 6px;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 1px 1px 8px;
   scrollbar-width: thin;
   scrollbar-color: var(--line) transparent;
@@ -845,6 +846,8 @@ svg {
 .skill-icon,
 .plus-mark { display: grid; place-items: center; width: 32px; height: 32px; flex: 0 0 auto; border-radius: 9px; font-weight: 720; }
 .skill-icon { font-size: 16px; }
+.skill-icon svg { width: 17px; height: 17px; stroke-width: 1.9; }
+.skill-tile-icon svg { width: 26px; height: 26px; stroke-width: 1.7; }
 .skill-icon svg { width: 16px; height: 16px; }
 .skill-icon.violet { color: var(--violet); background: rgba(156, 143, 232, 0.11); }
 .skill-icon.amber { color: var(--amber); background: rgba(217, 170, 94, 0.1); }
@@ -1086,32 +1089,11 @@ svg {
 .msg-action-btn .copied { color: var(--green); }
 
 /* --- Skill rows: delete control (#10) --- */
-.skill-row { position: relative; display: flex; align-items: center; }
-.skill-row .skill-action { flex: 1; min-width: 0; }
-.skill-copy { min-width: 0; }
+.skill-row { position: relative; display: flex; align-items: center; min-width: 0; }
+.skill-row .skill-action { flex: 1; min-width: 0; overflow: hidden; }
+.skill-copy { display: block; flex: 1; min-width: 0; }
 .skill-action strong,
 .skill-action small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.skill-delete {
-  position: absolute;
-  right: 6px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  background: rgba(255, 255, 255, 0.7);
-  border: 1px solid var(--line-soft);
-  border-radius: 7px;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 15px;
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-.skill-row:hover .skill-delete,
-.skill-delete:focus-visible { opacity: 1; }
-.skill-delete:hover { background: rgba(185, 85, 85, 0.12); border-color: rgba(185, 85, 85, 0.4); color: var(--red); }
 
 /* --- Send button doubles as a stop button while busy (#1) --- */
 .send-button .icon-stop { display: none; }
