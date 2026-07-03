@@ -325,7 +325,30 @@
                   <span><strong>System</strong><small>只使用系统/环境变量代理</small></span>
                 </label>
               </fieldset>
-              <p class="settings-help">默认建议使用 Auto：只有问题明显依赖近期公开信息时才会触发搜索；如果用户明确要求不联网，应遵循用户指令。</p>
+              <fieldset class="web-search-picker">
+                <legend>搜索来源</legend>
+                <label class="web-search-option">
+                  <input type="radio" name="search-provider" value="none" />
+                  <span><strong>内置抓取</strong><small>免费，无需 Key；质量有限</small></span>
+                </label>
+                <label class="web-search-option">
+                  <input type="radio" name="search-provider" value="bocha" />
+                  <span><strong>博查 Bocha</strong><small>国内直连，中文效果好（付费）</small></span>
+                </label>
+                <label class="web-search-option">
+                  <input type="radio" name="search-provider" value="tavily" />
+                  <span><strong>Tavily</strong><small>面向 Agent，有免费额度</small></span>
+                </label>
+                <label class="web-search-option">
+                  <input type="radio" name="search-provider" value="brave" />
+                  <span><strong>Brave</strong><small>有免费额度，需国际网络</small></span>
+                </label>
+              </fieldset>
+              <label>
+                <span>搜索 API Key <em>选择非内置来源时必填</em></span>
+                <input id="search-api-key-input" type="password" placeholder="仅保存在本次本机进程内" autocomplete="off" />
+              </label>
+              <p class="settings-help">默认建议使用 Auto：只有问题明显依赖近期公开信息时才会触发搜索；如果用户明确要求不联网，应遵循用户指令。配置正规搜索 API 后结果质量显著优于内置抓取；API 调用失败会自动回退到内置抓取。</p>
             </section>
 
             <section class="settings-section" data-settings-section-panel="memory">
@@ -364,24 +387,6 @@
               <button class="primary-button" type="submit">保存设置</button>
             </div>
           </form>
-        </div>
-      </div>
-    </div>
-
-    <div class="modal-backdrop hidden" id="approval-modal">
-      <div class="modal-card approval-card" role="dialog" aria-modal="true" aria-labelledby="approval-title">
-        <div class="approval-symbol">!</div>
-        <span class="eyebrow">HUMAN APPROVAL REQUIRED</span>
-        <h2 id="approval-title">Agent 请求执行受控操作</h2>
-        <div class="approval-summary">
-          <div><span>工具</span><strong id="approval-tool"></strong></div>
-          <div><span>风险</span><strong id="approval-risk"></strong></div>
-        </div>
-        <pre id="approval-arguments"></pre>
-        <p>请检查参数。批准仅对这一次调用有效。</p>
-        <div class="modal-actions">
-          <button class="secondary-button" id="deny-approval-button" type="button">拒绝</button>
-          <button class="danger-button" id="allow-approval-button" type="button">允许本次执行</button>
         </div>
       </div>
     </div>

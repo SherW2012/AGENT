@@ -35,16 +35,14 @@ const state = {
   // Claude-style follow: keep pinned to the bottom while streaming, but stop
   // following as soon as the user scrolls up, and resume when they return.
   stickToBottom: true,
+  // Tools the user chose "本轮始终允许" for; cleared when the turn ends.
+  autoApproveTools: new Set(),
+  approvalCard: null,
 };
 
 const elements = {
   appShell: document.querySelector(".app-shell"),
-  allowApproval: document.querySelector("#allow-approval-button"),
   apiKey: document.querySelector("#api-key-input"),
-  approvalArguments: document.querySelector("#approval-arguments"),
-  approvalModal: document.querySelector("#approval-modal"),
-  approvalRisk: document.querySelector("#approval-risk"),
-  approvalTool: document.querySelector("#approval-tool"),
   attachButton: document.querySelector("#attach-button"),
   attachmentInput: document.querySelector("#attachment-input"),
   attachmentList: document.querySelector("#attachment-list"),
@@ -55,7 +53,6 @@ const elements = {
   connection: document.querySelector("#connection-state"),
   connectionLabel: document.querySelector("#connection-label"),
   conversation: document.querySelector("#conversation-scroll"),
-  denyApproval: document.querySelector("#deny-approval-button"),
   emptyState: document.querySelector("#empty-state"),
   fileCount: document.querySelector("#file-count"),
   fileList: document.querySelector("#file-list"),
@@ -106,6 +103,8 @@ const elements = {
   usageStats: document.querySelector("#usage-stats"),
   autoMemoryToggle: document.querySelector("#auto-memory-toggle"),
   clearAutoMemory: document.querySelector("#clear-auto-memory-button"),
+  searchApiKey: document.querySelector("#search-api-key-input"),
+  searchProviderInputs: document.querySelectorAll('input[name="search-provider"]'),
   webSearchInputs: document.querySelectorAll('input[name="web-search-mode"]'),
   webSearchNetworkInputs: document.querySelectorAll('input[name="web-search-network"]'),
   workspaceChip: document.querySelector("#workspace-chip"),
@@ -261,6 +260,11 @@ function setBusy(busy) {
   } else {
     setConnection("offline", "离线模式");
   }
+  if (!busy) {
+    state.autoApproveTools.clear();
+    removeApprovalCard();
+    state.currentApproval = null;
+  }
 }
 
 function updateConfig(config) {
@@ -280,6 +284,8 @@ function updateConfig(config) {
   elements.webSearchInputs.forEach((input) => { input.checked = input.value === (config.webSearchMode || "auto"); });
   elements.webSearchNetworkInputs.forEach((input) => { input.checked = input.value === (config.webSearchNetwork || "auto"); });
   elements.autoMemoryToggle.checked = config.autoMemory !== false;
+  elements.searchProviderInputs.forEach((input) => { input.checked = input.value === (config.searchProvider || "none"); });
+  elements.searchApiKey.placeholder = config.searchApiKeyConfigured ? "已配置（留空沿用）" : "仅保存在本次本机进程内";
   syncProviderFields(config.provider, false);
   elements.model.value = config.model;
   elements.baseUrl.value = config.baseUrl || "";
@@ -1977,23 +1983,151 @@ async function pollEvents() {
   }
 }
 
+const RISK_LABELS = { read: "读取", write: "写入", execute: "执行", external: "外部访问", clinical: "临床（禁止）" };
+
+function describeApproval(tool, args = {}) {
+  const text = (value, cap = 90) => {
+    const s = String(value ?? "");
+    return s.length > cap ? s.slice(0, cap) + "…" : s;
+  };
+  const contentPreview = (value) => {
+    const s = String(value ?? "");
+    const lines = s.split("\n");
+    return `${lines.length} 行 · ${text(lines[0], 60) || "(空行)"}`;
+  };
+  switch (tool) {
+    case "write_project_text":
+      return { title: `写入文件 ${text(args.path)}`, rows: [["内容", contentPreview(args.content)]] };
+    case "run_build":
+      return { title: `运行编译/脚本档案「${text(args.profile)}」`, rows: [] };
+    case "configure_build_profile":
+      return { title: `登记编译档案「${text(args.profile)}」`, rows: [["脚本", text(args.script_path, 120)]] };
+    case "web_search":
+      return { title: "联网搜索（含敏感词，需确认）", rows: [["查询", text(args.query, 120)]] };
+    case "fetch_url":
+      return { title: "读取网页（需确认）", rows: [["地址", text(args.url, 120)]] };
+    case "append_agent_memory":
+      return { title: "写入一条记忆", rows: [["内容", text(args.note, 120)], ["分类", text(args.category)]] };
+    case "forget_agent_memory":
+      return { title: `删除包含「${text(args.match)}」的记忆`, rows: [] };
+    case "create_agent_skill":
+      return { title: "创建一个新 Skill", rows: [["定义", contentPreview(args.skill_md)]] };
+    case "install_agent_skill":
+      return { title: "从 GitHub 安装 Skill", rows: [["地址", text(args.url, 120)]] };
+    case "create_scheduled_task": {
+      const period = args.schedule_type === "daily" ? `每天 ${text(args.daily_time)}` : `每 ${args.interval_minutes} 分钟`;
+      return { title: `创建定时任务（${period}）`, rows: [["任务", text(args.prompt, 120)]] };
+    }
+    case "delete_scheduled_task":
+      return { title: "删除一个定时任务", rows: [["ID", text(args.id)]] };
+    case "create_word_document":
+      return { title: `生成 Word 文档 ${text(args.path)}`, rows: [["标题", text(args.title)]] };
+    case "create_powerpoint":
+      return { title: `生成 PPT ${text(args.path)}`, rows: [["页数", Array.isArray(args.slides) ? args.slides.length : "?"]] };
+    case "create_excel":
+      return { title: `生成 Excel ${text(args.path)}`, rows: [["工作表", Array.isArray(args.sheets) ? args.sheets.length : "?"]] };
+    case "run_unit_tests":
+      return { title: "运行项目单元测试", rows: [] };
+    default: {
+      const rows = Object.entries(args || {}).slice(0, 4).map(([key, value]) => [key, text(
+        typeof value === "string" ? value : JSON.stringify(value), 100)]);
+      return { title: `${toolDisplayName(tool)}`, rows };
+    }
+  }
+}
+
+function removeApprovalCard() {
+  state.approvalCard?.remove();
+  state.approvalCard = null;
+}
+
+function renderApprovalCard(approval) {
+  removeApprovalCard();
+  const described = describeApproval(approval.tool, approval.arguments || {});
+  const card = document.createElement("div");
+  card.className = "approval-inline";
+
+  const head = document.createElement("div");
+  head.className = "approval-inline-head";
+  const badge = document.createElement("span");
+  badge.className = `approval-risk-badge risk-${approval.risk}`;
+  badge.textContent = RISK_LABELS[approval.risk] || approval.risk;
+  const title = document.createElement("strong");
+  title.textContent = described.title;
+  head.append(badge, title);
+  card.append(head);
+
+  if (described.rows.length) {
+    const details = document.createElement("div");
+    details.className = "approval-inline-details";
+    described.rows.forEach(([label, value]) => {
+      const row = document.createElement("div");
+      const key = document.createElement("span");
+      key.textContent = label;
+      const val = document.createElement("code");
+      val.textContent = String(value);
+      row.append(key, val);
+      details.append(row);
+    });
+    card.append(details);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "approval-inline-actions";
+  const allow = document.createElement("button");
+  allow.type = "button";
+  allow.className = "approval-btn allow";
+  allow.textContent = "允许";
+  allow.addEventListener("click", () => resolveApproval(true, false));
+  const always = document.createElement("button");
+  always.type = "button";
+  always.className = "approval-btn always";
+  always.textContent = "本轮始终允许";
+  always.title = "本次任务结束前，同类操作不再询问";
+  always.addEventListener("click", () => resolveApproval(true, true));
+  const deny = document.createElement("button");
+  deny.type = "button";
+  deny.className = "approval-btn deny";
+  deny.textContent = "拒绝";
+  deny.addEventListener("click", () => resolveApproval(false, false));
+  actions.append(allow, always, deny);
+  card.append(actions);
+
+  // Live inside the streaming draft when there is one, else at the list end.
+  const host = state.activeDraft?.article.querySelector(".message-body") || elements.messageList;
+  host.append(card);
+  state.approvalCard = card;
+  if (state.stickToBottom) {
+    elements.conversation.scrollTo({ top: elements.conversation.scrollHeight });
+  }
+}
+
 async function pollApprovals() {
   if (state.currentApproval) return;
   const result = await api("/api/approvals");
   const approval = (result.approvals || [])[0];
   if (!approval) return;
   state.currentApproval = approval;
-  elements.approvalTool.textContent = approval.tool;
-  elements.approvalRisk.textContent = approval.risk;
-  elements.approvalArguments.textContent = JSON.stringify(approval.arguments, null, 2);
-  elements.approvalModal.classList.remove("hidden");
+  // "本轮始终允许" auto-resolves same-tool requests without re-asking.
+  if (state.autoApproveTools.has(approval.tool)) {
+    const current = approval;
+    state.currentApproval = null;
+    try {
+      await api("/api/approval", { method: "POST", body: JSON.stringify({ id: current.id, approved: true }) });
+    } catch (_error) {
+      // The request may have timed out server-side; the next poll recovers.
+    }
+    return;
+  }
+  renderApprovalCard(approval);
 }
 
-async function resolveApproval(approved) {
+async function resolveApproval(approved, always) {
   if (!state.currentApproval) return;
   const approval = state.currentApproval;
   state.currentApproval = null;
-  elements.approvalModal.classList.add("hidden");
+  if (approved && always) state.autoApproveTools.add(approval.tool);
+  removeApprovalCard();
   try {
     await api("/api/approval", {
       method: "POST",
@@ -2058,6 +2192,8 @@ function openSettings(section = "connection") {
     elements.webSearchInputs.forEach((input) => { input.checked = input.value === (state.config.webSearchMode || "auto"); });
     elements.webSearchNetworkInputs.forEach((input) => { input.checked = input.value === (state.config.webSearchNetwork || "auto"); });
     elements.autoMemoryToggle.checked = state.config.autoMemory !== false;
+    elements.searchProviderInputs.forEach((input) => { input.checked = input.value === (state.config.searchProvider || "none"); });
+    elements.searchApiKey.value = "";
   }
   switchSettingsSection(section);
   elements.apiKey.value = "";
@@ -2082,6 +2218,8 @@ async function saveSettings(event) {
     webSearchMode: selectedWebSearchMode(),
     webSearchNetwork: selectedWebSearchNetwork(),
     autoMemory: elements.autoMemoryToggle.checked,
+    searchProvider: Array.from(elements.searchProviderInputs).find((input) => input.checked)?.value || "none",
+    searchApiKey: elements.searchApiKey.value.trim(),
   };
   try {
     const config = await api("/api/config", { method: "POST", body: JSON.stringify(payload) });
@@ -2300,8 +2438,6 @@ function bindEvents() {
   elements.workspaceSwitch.addEventListener("click", switchWorkspaceFolder);
   elements.closePreview.addEventListener("click", closePreview);
   elements.previewBackdrop.addEventListener("click", closePreview);
-  elements.allowApproval.addEventListener("click", () => resolveApproval(true));
-  elements.denyApproval.addEventListener("click", () => resolveApproval(false));
   elements.sidebarToggle.addEventListener("click", () => toggleSidebar(true));
   elements.sidebarExpand.addEventListener("click", () => toggleSidebar(false));
   document.querySelectorAll("[data-task]").forEach((button) => {

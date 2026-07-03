@@ -325,6 +325,8 @@ class ApplicationState:
                 web_search_mode=self.settings.web_search_mode,
                 web_search_network=self.settings.web_search_network,
                 data_dir=self.data_dir,
+                search_provider=self.settings.search_provider,
+                search_api_key=self.settings.search_api_key,
             )
             self.runtime = None
             if self.settings.api_key:
@@ -366,6 +368,8 @@ class ApplicationState:
             "webSearchMode": self.settings.web_search_mode,
             "webSearchNetwork": self.settings.web_search_network,
             "autoMemory": self.settings.auto_memory,
+            "searchProvider": self.settings.search_provider,
+            "searchApiKeyConfigured": bool(self.settings.search_api_key),
             "usageTotals": self.usage_totals(),
             "busy": self._chat_lock.locked(),
             "currentSessionId": self.current_session_id,
@@ -446,6 +450,8 @@ class ApplicationState:
                 if "autoMemory" in payload
                 else self.settings.auto_memory
             ),
+            search_provider=str(payload.get("searchProvider") or self.settings.search_provider),
+            search_api_key=str(payload.get("searchApiKey") or "").strip() or self.settings.search_api_key,
         )
         if loaded.api_key:
             self._credentials[provider] = loaded.api_key

@@ -75,6 +75,8 @@ class ToolRegistry:
         web_search_mode: str = "auto",
         web_search_network: str = "auto",
         data_dir: Path | None = None,
+        search_provider: str = "none",
+        search_api_key: str | None = None,
     ):
         self.root = root
         self.policy = policy
@@ -84,6 +86,8 @@ class ToolRegistry:
         self.skill_registry = skill_registry or SkillRegistry(root)
         self.web_search_mode = web_search_mode
         self.web_search_network = web_search_network
+        self.search_provider = search_provider
+        self.search_api_key = search_api_key
         self._tools = {tool.name: tool for tool in self._build_tools()}
 
     def _emit(self, event: dict[str, Any]) -> None:
@@ -426,6 +430,8 @@ class ToolRegistry:
                         max_results=max_results,
                         network=self.web_search_network,
                         recency=recency,
+                        search_provider=self.search_provider,
+                        search_api_key=self.search_api_key,
                     ),
                     risk_resolver=self._web_search_risk,
                 )

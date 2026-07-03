@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import base64
 import ipaddress
@@ -22,6 +23,9 @@ DEFAULT_FETCH_CHARS = 40_000
 MAX_FETCH_CHARS = 80_000
 MAX_FETCH_URL_CHARS = 2048
 WEB_SEARCH_NETWORKS = {"auto", "direct", "system"}
+# Real search APIs (configured with the user's own key) come first; the free
+# scraping backends remain as the zero-config fallback.
+SEARCH_API_PROVIDERS = {"none", "bocha", "tavily", "brave"}
 
 # NOTE: Recency / time-sensitivity is decided by the model via the web_search
 # tool's `recency` argument, NOT by a hardcoded keyword whitelist. Different
@@ -423,6 +427,90 @@ def _search_sources(query: str, recency: bool) -> list[tuple[str, str]]:
     return sources
 
 
+def _http_json(
+    url: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    body: dict[str, Any] | None = None,
+    network: str = "auto",
+) -> Any:
+    payload = json.dumps(body).encode("utf-8") if body is not None else None
+    request_headers = {"Accept": "application/json", "User-Agent": "BNCT-TPS-Agent/0.1"}
+    if body is not None:
+        request_headers["Content-Type"] = "application/json"
+    request_headers.update(headers or {})
+    request = Request(url, data=payload, headers=request_headers, method=method)
+    with _open_url(request, timeout=14, network=network) as response:
+        return json.loads(response.read(1_500_000).decode("utf-8", errors="replace"))
+
+
+def _search_via_api(
+    provider: str,
+    api_key: str,
+    query: str,
+    limit: int,
+    recency: bool,
+    network: str,
+) -> list[dict[str, str]]:
+    """Query a proper search API. Each provider gets the query verbatim as
+    natural language — no tokenizing, same principle as the scraping path."""
+    results: list[dict[str, str]] = []
+    if provider == "bocha":
+        payload = _http_json(
+            "https://api.bochaai.com/v1/web-search",
+            method="POST",
+            headers={"Authorization": f"Bearer {api_key}"},
+            body={
+                "query": query,
+                "count": limit,
+                "freshness": "oneMonth" if recency else "noLimit",
+                "summary": True,
+            },
+            network=network,
+        )
+        for item in (((payload.get("data") or {}).get("webPages") or {}).get("value") or [])[:limit]:
+            results.append({
+                "title": str(item.get("name") or ""),
+                "url": str(item.get("url") or ""),
+                "snippet": str(item.get("summary") or item.get("snippet") or ""),
+            })
+    elif provider == "tavily":
+        payload = _http_json(
+            "https://api.tavily.com/search",
+            method="POST",
+            body={
+                "api_key": api_key,
+                "query": query,
+                "max_results": limit,
+                "topic": "news" if recency else "general",
+            },
+            network=network,
+        )
+        for item in (payload.get("results") or [])[:limit]:
+            results.append({
+                "title": str(item.get("title") or ""),
+                "url": str(item.get("url") or ""),
+                "snippet": str(item.get("content") or ""),
+            })
+    elif provider == "brave":
+        params = {"q": query, "count": str(limit)}
+        if recency:
+            params["freshness"] = "pw"
+        payload = _http_json(
+            "https://api.search.brave.com/res/v1/web/search?" + urlencode(params),
+            headers={"X-Subscription-Token": api_key},
+            network=network,
+        )
+        for item in (((payload.get("web") or {}).get("results")) or [])[:limit]:
+            results.append({
+                "title": str(item.get("title") or ""),
+                "url": str(item.get("url") or ""),
+                "snippet": str(item.get("description") or ""),
+            })
+    return [item for item in results if item["title"] and item["url"]]
+
+
 def _parse_results(source: str, body: str, limit: int) -> list[dict[str, str]]:
     if source in {"duckduckgo-rss", "google-news-rss", "bing-news-rss"}:
         return parse_duckduckgo_rss(body, limit)
@@ -437,6 +525,8 @@ def web_search(
     max_results: int = DEFAULT_MAX_RESULTS,
     network: str = "auto",
     recency: bool = False,
+    search_provider: str = "none",
+    search_api_key: str | None = None,
 ) -> dict[str, Any]:
     clean_query = str(query or "").strip()
     if not clean_query:
@@ -456,7 +546,23 @@ def web_search(
     diagnostics = []
     results: list[dict[str, str]] = []
     source_used = ""
-    for source, url in _search_sources(clean_query, recency):
+
+    provider = str(search_provider or "none").strip().lower()
+    if provider in SEARCH_API_PROVIDERS and provider != "none" and search_api_key:
+        try:
+            results = _search_via_api(provider, search_api_key, clean_query, limit, recency, network)
+            if results:
+                source_used = f"api:{provider}"
+        except Exception as exc:
+            diagnostics.append({
+                "source": f"api:{provider}",
+                "network": network,
+                "errorType": type(exc).__name__,
+                "message": str(exc)[:420],
+            })
+            results = []
+
+    for source, url in ([] if results else _search_sources(clean_query, recency)):
         try:
             body = _fetch_text(url, network=network)
         except OSError as exc:

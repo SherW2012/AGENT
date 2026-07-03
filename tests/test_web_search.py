@@ -145,6 +145,53 @@ class WebSearchTests(unittest.TestCase):
         self.assertEqual(result["source"], "bing-html")
         self.assertEqual(result["results"][0]["url"], "https://example.net/news")
 
+    def test_search_api_provider_is_used_when_configured(self):
+        bocha_payload = {
+            "data": {"webPages": {"value": [
+                {"name": "峰哥亡命天涯 - 户外UP主", "url": "https://example.com/fengge", "summary": "知名户外探险UP主介绍"},
+            ]}}
+        }
+        import json as jsonlib
+
+        class FakeJsonResponse:
+            def __init__(self, payload):
+                self.body = jsonlib.dumps(payload).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit=-1):
+                return self.body
+
+        with patch("bnct_tps_agent.web_search._open_url", return_value=FakeJsonResponse(bocha_payload)):
+            result = web_search(
+                self.root, "峰哥亡命天涯是谁", max_results=3,
+                search_provider="bocha", search_api_key="test-key",
+            )
+        self.assertEqual(result["source"], "api:bocha")
+        self.assertEqual(result["results"][0]["url"], "https://example.com/fengge")
+
+    def test_search_api_failure_falls_back_to_scraping(self):
+        # First call (API) raises, subsequent scraping calls return usable HTML.
+        responses = [OSError("api down"), FakeResponse(HTML), FakeResponse(HTML), FakeResponse(HTML)]
+
+        def fake_open(*_args, **_kwargs):
+            item = responses.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        with patch("bnct_tps_agent.web_search._open_url", side_effect=fake_open):
+            result = web_search(
+                self.root, "latest BNCT paper", max_results=1,
+                search_provider="tavily", search_api_key="k",
+            )
+        self.assertTrue(result["results"])
+        self.assertNotEqual(result["source"], "api:tavily")
+
     def test_tool_registry_hides_search_when_disabled(self):
         registry = ToolRegistry(
             self.root,

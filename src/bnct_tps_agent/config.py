@@ -9,6 +9,7 @@ from .providers import get_provider
 
 WEB_SEARCH_MODES = {"auto", "ask", "off"}
 WEB_SEARCH_NETWORKS = {"auto", "direct", "system"}
+SEARCH_API_PROVIDERS = {"none", "bocha", "tavily", "brave"}
 
 
 def user_data_dir() -> Path:
@@ -37,6 +38,8 @@ class Settings:
     web_search_mode: str = "auto"
     web_search_network: str = "auto"
     auto_memory: bool = True
+    search_provider: str = "none"
+    search_api_key: str | None = None
 
     @classmethod
     def load(
@@ -51,6 +54,8 @@ class Settings:
         web_search_mode: str | None = None,
         web_search_network: str | None = None,
         auto_memory: bool | None = None,
+        search_provider: str | None = None,
+        search_api_key: str | None = None,
     ) -> "Settings":
         resolved_root = Path(root).expanduser().resolve()
         if not resolved_root.is_dir():
@@ -73,6 +78,10 @@ class Settings:
             raise ValueError("BNCT_AGENT_WEB_SEARCH_NETWORK must be one of: auto, direct, system")
         if auto_memory is None:
             auto_memory = os.getenv("BNCT_AGENT_AUTO_MEMORY", "1").strip().lower() not in {"0", "false", "off"}
+        configured_search_provider = (search_provider or os.getenv("BNCT_AGENT_SEARCH_PROVIDER", "none")).strip().lower()
+        if configured_search_provider not in SEARCH_API_PROVIDERS:
+            raise ValueError("BNCT_AGENT_SEARCH_PROVIDER must be one of: none, bocha, tavily, brave")
+        configured_search_key = search_api_key or os.getenv("BNCT_AGENT_SEARCH_API_KEY") or None
 
         return cls(
             root=resolved_root,
@@ -92,4 +101,6 @@ class Settings:
             web_search_mode=configured_web_search_mode,
             web_search_network=configured_web_search_network,
             auto_memory=bool(auto_memory),
+            search_provider=configured_search_provider,
+            search_api_key=configured_search_key,
         )
