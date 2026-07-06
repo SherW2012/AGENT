@@ -211,6 +211,20 @@ class WebSearchTests(unittest.TestCase):
         )
         self.assertIn("fetch_url", {schema["name"] for schema in registry.schemas})
 
+    def test_builtin_provider_search_replaces_local_web_search_tool(self):
+        # Kimi searches on the provider side: the local scraping tool would be
+        # redundant/worse, so it is dropped while fetch_url stays.
+        registry = ToolRegistry(
+            self.root,
+            SafetyPolicy(),
+            AuditLogger(self.root / "tests" / "runtime_output" / "builtin-search-registry-audit"),
+            web_search_mode="auto",
+            builtin_search=True,
+        )
+        names = {schema["name"] for schema in registry.schemas}
+        self.assertNotIn("web_search", names)
+        self.assertIn("fetch_url", names)
+
     def test_sensitive_auto_search_requires_approval(self):
         registry = ToolRegistry(
             self.root,

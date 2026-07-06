@@ -4,6 +4,15 @@ import uuid
 from pathlib import Path
 
 from bnct_tps_agent.memory import append_agent_memory, forget_agent_memory, merge_auto_memory, read_auto_memory, sanitize_auto_memory_lines
+from bnct_tps_agent.personal import (
+    add_calendar_entry,
+    add_quick_link,
+    delete_calendar_entry,
+    delete_quick_link,
+    list_calendar_entries,
+    list_quick_links,
+    resolve_quick_link,
+)
 from bnct_tps_agent.sessions import SessionStore
 
 
@@ -86,6 +95,64 @@ class MemoryAndSessionTests(unittest.TestCase):
         self.assertEqual(again, 0)
         content = read_auto_memory(self.data_dir)
         self.assertIn("常用 VS2019 编译", content)
+
+
+class PersonalPanelTests(unittest.TestCase):
+    def setUp(self):
+        base = Path(__file__).resolve().parents[1] / "tests" / "runtime_output"
+        self.data_dir = base / f"personal-{uuid.uuid4().hex}"
+        self.data_dir.mkdir(parents=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.data_dir, ignore_errors=True)
+
+    def test_calendar_entry_lifecycle(self):
+        created = add_calendar_entry(self.data_dir, "2026-07-08", "评审剂量模块", "09:30")
+        self.assertEqual(created["date"], "2026-07-08")
+        self.assertEqual(list_calendar_entries(self.data_dir)["count"], 1)
+        removed = delete_calendar_entry(self.data_dir, created["id"], "")
+        self.assertEqual(removed["removed"], 1)
+        self.assertEqual(list_calendar_entries(self.data_dir)["count"], 0)
+
+    def test_calendar_validation(self):
+        with self.assertRaises(ValueError):
+            add_calendar_entry(self.data_dir, "07-08", "缺年份")
+        with self.assertRaises(ValueError):
+            add_calendar_entry(self.data_dir, "2026-13-40", "非法日期")
+        with self.assertRaises(ValueError):
+            add_calendar_entry(self.data_dir, "2026-07-08", "")
+        with self.assertRaises(ValueError):
+            add_calendar_entry(self.data_dir, "2026-07-08", "时间格式错", "9点半")
+
+    def test_calendar_delete_by_text_match(self):
+        add_calendar_entry(self.data_dir, "2026-07-08", "评审剂量模块")
+        add_calendar_entry(self.data_dir, "2026-07-09", "整理周报")
+        removed = delete_calendar_entry(self.data_dir, "", "剂量")
+        self.assertEqual(removed["removed"], 1)
+        with self.assertRaises(ValueError):
+            delete_calendar_entry(self.data_dir, "", "x")  # too-short match rejected
+
+    def test_quick_link_lifecycle_and_open(self):
+        add_quick_link(self.data_dir, "禅道", "https://zentao.example.com/bug")
+        # Same name replaces the URL instead of duplicating.
+        add_quick_link(self.data_dir, "禅道", "https://zentao.example.com/task")
+        links = list_quick_links(self.data_dir)
+        self.assertEqual(links["count"], 1)
+        self.assertIn("task", links["links"][0]["url"])
+        resolved = resolve_quick_link(self.data_dir, "禅道")
+        self.assertIn("task", resolved["url"])
+        # Fuzzy match works; unknown names list what exists.
+        self.assertEqual(resolve_quick_link(self.data_dir, "禅")["name"], "禅道")
+        with self.assertRaises(ValueError):
+            resolve_quick_link(self.data_dir, "不存在")
+        delete_quick_link(self.data_dir, "禅道")
+        self.assertEqual(list_quick_links(self.data_dir)["count"], 0)
+
+    def test_quick_link_rejects_non_http_urls(self):
+        with self.assertRaises(ValueError):
+            add_quick_link(self.data_dir, "本地脚本", "file:///C:/tools/run.bat")
+        with self.assertRaises(ValueError):
+            add_quick_link(self.data_dir, "脚本", "javascript:alert(1)")
 
 
 if __name__ == "__main__":

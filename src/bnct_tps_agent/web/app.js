@@ -38,6 +38,9 @@ const state = {
   // Tools the user chose "本轮始终允许" for; cleared when the turn ends.
   autoApproveTools: new Set(),
   approvalCard: null,
+  // Calendar panel state: displayed month + entries/links from /api/personal.
+  calendar: { year: new Date().getFullYear(), month: new Date().getMonth(), selected: "" },
+  personal: { calendar: [], links: [] },
 };
 
 const elements = {
@@ -50,24 +53,16 @@ const elements = {
   baseUrl: document.querySelector("#base-url-input"),
   browseFolder: document.querySelector("#browse-folder-button"),
   browseFolderLabel: document.querySelector("#browse-folder-label"),
-  closePreview: document.querySelector("#close-preview-button"),
   connection: document.querySelector("#connection-state"),
   connectionLabel: document.querySelector("#connection-label"),
   conversation: document.querySelector("#conversation-scroll"),
   emptyState: document.querySelector("#empty-state"),
-  fileCount: document.querySelector("#file-count"),
-  fileList: document.querySelector("#file-list"),
-  fileSearch: document.querySelector("#file-search"),
   importSkill: document.querySelector("#import-skill-button"),
   messageList: document.querySelector("#message-list"),
   model: document.querySelector("#model-input"),
   modelOptions: document.querySelector("#provider-models"),
   modelPill: document.querySelector("#model-pill"),
   newSession: document.querySelector("#new-session-button"),
-  previewBackdrop: document.querySelector("#preview-backdrop"),
-  previewContent: document.querySelector("#preview-content"),
-  previewDrawer: document.querySelector("#preview-drawer"),
-  previewTitle: document.querySelector("#preview-title"),
   prompt: document.querySelector("#prompt-input"),
   providerDocsLink: document.querySelector("#provider-docs-link"),
   providerHelpText: document.querySelector("#provider-help-text"),
@@ -104,14 +99,19 @@ const elements = {
   usageStats: document.querySelector("#usage-stats"),
   autoMemoryToggle: document.querySelector("#auto-memory-toggle"),
   clearAutoMemory: document.querySelector("#clear-auto-memory-button"),
-  searchApiKey: document.querySelector("#search-api-key-input"),
-  searchProviderInputs: document.querySelectorAll('input[name="search-provider"]'),
-  webSearchInputs: document.querySelectorAll('input[name="web-search-mode"]'),
-  webSearchNetworkInputs: document.querySelectorAll('input[name="web-search-network"]'),
-  workspaceChip: document.querySelector("#workspace-chip"),
-  workspaceName: document.querySelector("#workspace-name"),
-  workspacePath: document.querySelector("#workspace-path"),
-  workspaceSwitch: document.querySelector("#workspace-switch-button"),
+  webSearchEnabledToggle: document.querySelector("#web-search-enabled-toggle"),
+  workdirChip: document.querySelector("#workdir-chip"),
+  workdirPath: document.querySelector("#workdir-path"),
+  webSearchToggle: document.querySelector("#web-search-toggle"),
+  mascot: document.querySelector("#mascot"),
+  calTitle: document.querySelector("#cal-title"),
+  calPrev: document.querySelector("#cal-prev"),
+  calNext: document.querySelector("#cal-next"),
+  calendarGrid: document.querySelector("#calendar-grid"),
+  calendarEntries: document.querySelector("#calendar-entries"),
+  quickLinks: document.querySelector("#quick-links"),
+  addEventButton: document.querySelector("#add-event-button"),
+  addLinkButton: document.querySelector("#add-link-button"),
 };
 
 async function api(path, options = {}) {
@@ -239,6 +239,7 @@ function setBusy(busy) {
   } else {
     setConnection("offline", "离线模式");
   }
+  elements.mascot?.classList.toggle("working", busy);
   if (!busy) {
     state.autoApproveTools.clear();
     removeApprovalCard();
@@ -254,17 +255,13 @@ function updateConfig(config) {
   if (eventScopeChanged) state.lastEventId = 0;
   state.skills = config.skills || [];
   state.currentSessionId = config.currentSessionId || state.currentSessionId;
-  const parts = config.root.replaceAll("\\", "/").split("/").filter(Boolean);
-  elements.workspaceName.textContent = parts.at(-1) || config.root;
-  elements.workspacePath.textContent = config.root;
-  elements.workspaceChip.title = config.root;
+  elements.workdirPath.textContent = config.root;
+  elements.workdirChip.title = `工作目录：${config.root}\n点击切换`;
   elements.modelPill.textContent = config.apiKeyConfigured ? `${config.providerLabel} · ${config.model}` : "未连接模型";
   elements.providerInputs.forEach((input) => { input.checked = input.value === config.provider; });
-  elements.webSearchInputs.forEach((input) => { input.checked = input.value === (config.webSearchMode || "auto"); });
-  elements.webSearchNetworkInputs.forEach((input) => { input.checked = input.value === (config.webSearchNetwork || "auto"); });
   elements.autoMemoryToggle.checked = config.autoMemory !== false;
-  elements.searchProviderInputs.forEach((input) => { input.checked = input.value === (config.searchProvider || "none"); });
-  elements.searchApiKey.placeholder = config.searchApiKeyConfigured ? "已配置（留空沿用）" : "仅保存在本次本机进程内";
+  elements.webSearchEnabledToggle.checked = config.webSearchEnabled !== false;
+  renderWebSearchToggle();
   syncProviderFields(config.provider, false);
   elements.model.value = config.model;
   elements.baseUrl.value = config.baseUrl || "";
@@ -282,12 +279,39 @@ function selectedProvider() {
   return Array.from(elements.providerInputs).find((input) => input.checked)?.value || "openai";
 }
 
-function selectedWebSearchMode() {
-  return Array.from(elements.webSearchInputs).find((input) => input.checked)?.value || "auto";
+function renderWebSearchToggle() {
+  const enabled = state.config?.webSearchEnabled !== false;
+  elements.webSearchToggle.classList.toggle("on", enabled);
+  const engine = state.config?.webSearchEngine === "builtin" ? "Kimi 自带搜索" : "内置搜索";
+  elements.webSearchToggle.title = enabled
+    ? `联网搜索已开启（${engine}）。点击关闭；与设置页同步。`
+    : "联网搜索已关闭。点击开启；与设置页同步。";
 }
 
-function selectedWebSearchNetwork() {
-  return Array.from(elements.webSearchNetworkInputs).find((input) => input.checked)?.value || "auto";
+async function toggleWebSearch() {
+  if (!state.config) return;
+  if (state.busy) {
+    showToast("任务进行中，稍后再切换联网搜索", "error");
+    return;
+  }
+  const target = !(state.config.webSearchEnabled !== false);
+  try {
+    const config = await api("/api/config", {
+      method: "POST",
+      body: JSON.stringify({
+        provider: state.config.provider,
+        model: state.config.model,
+        baseUrl: state.config.baseUrl || "",
+        apiKey: "",
+        root: state.config.root,
+        webSearchEnabled: target,
+      }),
+    });
+    updateConfig(config);
+    showToast(target ? "联网搜索已开启" : "联网搜索已关闭");
+  } catch (error) {
+    showToast(error.message, "error");
+  }
 }
 
 function syncProviderFields(providerId, resetValues) {
@@ -738,10 +762,75 @@ function addMessageActions(article, rawText, retryTask) {
   // User bubbles stay compact: the action row lives below the bubble (as an
   // article-level sibling) and only appears while hovering the bubble itself.
   if (article.classList.contains("user")) {
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.className = "msg-action-btn";
+    editBtn.title = "编辑后重新提问";
+    const editLabel = document.createElement("span");
+    editLabel.textContent = "编辑";
+    editBtn.append(svgIcon(["M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17z", "m13.5 6.5 4 4"]), editLabel);
+    editBtn.addEventListener("click", () => enterUserMessageEdit(article, rawText));
+    row.append(editBtn);
     article.append(row);
   } else {
     body.append(row);
   }
+}
+
+function enterUserMessageEdit(article, rawText) {
+  // Kimi-style in-place edit: the bubble becomes editable with 取消/确定 below;
+  // confirming re-asks the edited question in this same session.
+  if (article.classList.contains("editing")) return;
+  const content = article.querySelector(".message-content");
+  if (!content) return;
+  article.classList.add("editing");
+  const editor = document.createElement("div");
+  editor.className = "message-edit";
+  const area = document.createElement("textarea");
+  area.className = "message-edit-area";
+  area.value = rawText;
+  const actions = document.createElement("div");
+  actions.className = "message-edit-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "edit-btn cancel";
+  cancel.textContent = "取消";
+  const confirm = document.createElement("button");
+  confirm.type = "button";
+  confirm.className = "edit-btn confirm";
+  confirm.textContent = "确定";
+  const exitEdit = () => {
+    editor.remove();
+    content.classList.remove("hidden");
+    article.classList.remove("editing");
+  };
+  const submit = () => {
+    const text = area.value.trim();
+    if (!text) return;
+    if (state.busy) {
+      showToast("当前任务仍在执行，请先停止或等它完成", "error");
+      return;
+    }
+    exitEdit();
+    sendTask(text);
+  };
+  cancel.addEventListener("click", exitEdit);
+  confirm.addEventListener("click", submit);
+  area.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      submit();
+    }
+    if (event.key === "Escape") exitEdit();
+  });
+  actions.append(cancel, confirm);
+  editor.append(area, actions);
+  content.classList.add("hidden");
+  content.after(editor);
+  area.style.height = "auto";
+  area.style.height = `${Math.min(area.scrollHeight + 4, 300)}px`;
+  area.focus();
+  area.setSelectionRange(area.value.length, area.value.length);
 }
 
 function appendMessage(role, text, options = {}) {
@@ -857,6 +946,9 @@ function appendAssistantDraft() {
     activityTitle: titleText,
     activityList: list,
     activities: [],
+    // Which session this stream belongs to: switching away detaches the
+    // article, switching back re-attaches it so live output is never lost.
+    session: state.currentSessionId,
   };
   setActivity("agent", "正在理解任务", "active");
   return article;
@@ -1074,8 +1166,13 @@ async function loadSessions(query = elements.sessionSearch.value) {
 function renderConversation(session) {
   state.currentSessionId = session.id;
   elements.messageList.replaceChildren();
+  // A live stream owned by this tab for THIS session: re-attach its draft
+  // article so switching away and back keeps showing thinking + output live
+  // (the stream keeps writing into the same DOM node while detached).
+  const liveDraft = state.activeDraft && state.abortController
+    && state.activeDraft.session === session.id ? state.activeDraft : null;
   const messages = session.messages || [];
-  if (!messages.length) {
+  if (!messages.length && !liveDraft) {
     showEmptyState();
   } else {
     hideEmptyState();
@@ -1098,6 +1195,15 @@ function renderConversation(session) {
         retryTask,
       });
     });
+    window.setTimeout(() => {
+      elements.conversation.scrollTo({ top: elements.conversation.scrollHeight });
+    }, 0);
+  }
+  if (liveDraft) {
+    // The just-sent user message is already in the stored history; only the
+    // in-flight assistant draft is missing. Same node, still stream-updated.
+    hideEmptyState();
+    elements.messageList.append(liveDraft.article);
     window.setTimeout(() => {
       elements.conversation.scrollTo({ top: elements.conversation.scrollHeight });
     }, 0);
@@ -1198,35 +1304,202 @@ async function newSession() {
   }
 }
 
-function fileIcon(path) {
-  const extension = path.includes(".") ? path.split(".").at(-1).toLowerCase() : "";
-  if (["py", "js", "ts", "cpp", "cc", "c", "cs"].includes(extension)) return "◇";
-  if (["json", "toml", "yaml", "yml", "xml"].includes(extension)) return "⌘";
-  if (["md", "txt", "log", "csv"].includes(extension)) return "≡";
-  return "·";
+// ---------- Calendar + quick links panel (replaces the old file browser) ----------
+
+function isoDate(year, month, day) {
+  return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-function renderFiles(filter = "") {
-  const needle = filter.trim().toLowerCase();
-  elements.fileList.replaceChildren();
-  const matching = state.files.filter((path) => path.toLowerCase().includes(needle));
-  matching.forEach((path) => {
-    const button = document.createElement("button");
-    button.className = "file-item";
-    button.type = "button";
-    button.dataset.depth = String(Math.min(path.split("/").length - 1, 4));
-    button.title = path;
-    const icon = document.createElement("span");
-    icon.className = "file-icon";
-    icon.textContent = fileIcon(path);
-    const name = document.createElement("span");
-    name.className = "file-name";
-    name.textContent = path.split("/").at(-1);
-    button.append(icon, name);
-    button.addEventListener("click", () => openPreview(path));
-    elements.fileList.append(button);
+function todayIso() {
+  const now = new Date();
+  return isoDate(now.getFullYear(), now.getMonth(), now.getDate());
+}
+
+async function loadPersonal() {
+  try {
+    const result = await api("/api/personal");
+    state.personal = { calendar: result.calendar || [], links: result.links || [] };
+    renderCalendar();
+    renderQuickLinks();
+  } catch (_error) {
+    // Panel data is non-critical; the next refresh recovers.
+  }
+}
+
+function shiftCalendarMonth(delta) {
+  const base = new Date(state.calendar.year, state.calendar.month + delta, 1);
+  state.calendar.year = base.getFullYear();
+  state.calendar.month = base.getMonth();
+  renderCalendar();
+}
+
+function renderCalendar() {
+  const { year, month } = state.calendar;
+  if (!state.calendar.selected) state.calendar.selected = todayIso();
+  elements.calTitle.textContent = `${year} 年 ${month + 1} 月`;
+  const eventDates = new Set(state.personal.calendar.map((item) => item.date));
+  const grid = elements.calendarGrid;
+  grid.replaceChildren();
+  "一二三四五六日".split("").forEach((label) => {
+    const head = document.createElement("span");
+    head.className = "cal-dow";
+    head.textContent = label;
+    grid.append(head);
   });
-  elements.fileCount.textContent = String(matching.length);
+  const first = new Date(year, month, 1);
+  const leading = (first.getDay() + 6) % 7; // Monday-first grid
+  const days = new Date(year, month + 1, 0).getDate();
+  for (let i = 0; i < leading; i += 1) grid.append(document.createElement("span"));
+  const today = todayIso();
+  for (let day = 1; day <= days; day += 1) {
+    const iso = isoDate(year, month, day);
+    const cell = document.createElement("button");
+    cell.type = "button";
+    cell.className = "cal-day";
+    if (iso === today) cell.classList.add("is-today");
+    if (iso === state.calendar.selected) cell.classList.add("is-selected");
+    if (eventDates.has(iso)) cell.classList.add("has-events");
+    cell.textContent = String(day);
+    cell.addEventListener("click", () => {
+      state.calendar.selected = iso;
+      renderCalendar();
+    });
+    grid.append(cell);
+  }
+  renderCalendarEntries();
+}
+
+function renderCalendarEntries() {
+  const selected = state.calendar.selected || todayIso();
+  const today = todayIso();
+  const wrap = elements.calendarEntries;
+  wrap.replaceChildren();
+  // Selected day's entries first, then the next few upcoming ones.
+  const ofDay = state.personal.calendar.filter((item) => item.date === selected);
+  const upcoming = state.personal.calendar
+    .filter((item) => item.date !== selected && item.date >= today)
+    .slice(0, 4);
+  const sections = [
+    [selected === today ? "今天" : selected, ofDay, true],
+    ["接下来", upcoming, false],
+  ];
+  sections.forEach(([label, items, showEmpty]) => {
+    if (!items.length && !showEmpty) return;
+    const head = document.createElement("div");
+    head.className = "cal-entries-label";
+    head.textContent = label;
+    wrap.append(head);
+    if (!items.length) {
+      const empty = document.createElement("div");
+      empty.className = "cal-entry-empty";
+      empty.textContent = "没有日程。对话框里说“帮我记录一个日程”即可添加。";
+      wrap.append(empty);
+      return;
+    }
+    items.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "cal-entry";
+      const text = document.createElement("span");
+      text.className = "cal-entry-text";
+      text.textContent = `${item.date === selected ? "" : `${item.date.slice(5)} `}${item.time ? `${item.time} ` : ""}${item.text}`;
+      text.title = `${item.date} ${item.time || ""} ${item.text}`;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "cal-entry-del";
+      remove.title = "删除日程";
+      remove.textContent = "×";
+      remove.addEventListener("click", async () => {
+        try {
+          await api("/api/personal/delete-event", { method: "POST", body: JSON.stringify({ id: item.id }) });
+          await loadPersonal();
+        } catch (error) {
+          showToast(error.message, "error");
+        }
+      });
+      row.append(text, remove);
+      wrap.append(row);
+    });
+  });
+}
+
+function renderQuickLinks() {
+  const wrap = elements.quickLinks;
+  wrap.replaceChildren();
+  if (!state.personal.links.length) {
+    const empty = document.createElement("div");
+    empty.className = "cal-entry-empty";
+    empty.textContent = "还没有常用链接。可以点 ＋ 添加，或在对话框里说“帮我记录一个常用链接”。";
+    wrap.append(empty);
+    return;
+  }
+  state.personal.links.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "quick-link-row";
+    const open = document.createElement("a");
+    open.className = "quick-link";
+    const href = safeLinkUrl(item.url);
+    if (!href) return;
+    open.href = href;
+    open.target = "_blank";
+    open.rel = "noreferrer noopener";
+    open.title = item.url;
+    const icon = document.createElement("span");
+    icon.className = "quick-link-icon";
+    icon.textContent = (item.name || "?").slice(0, 1).toUpperCase();
+    const name = document.createElement("span");
+    name.textContent = item.name;
+    open.append(icon, name);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "cal-entry-del";
+    remove.title = "删除链接";
+    remove.textContent = "×";
+    remove.addEventListener("click", async () => {
+      try {
+        await api("/api/personal/delete-link", { method: "POST", body: JSON.stringify({ name: item.name }) });
+        await loadPersonal();
+      } catch (error) {
+        showToast(error.message, "error");
+      }
+    });
+    row.append(open, remove);
+    wrap.append(row);
+  });
+}
+
+async function addCalendarEventFromPanel() {
+  const date = window.prompt("日期（YYYY-MM-DD）：", state.calendar.selected || todayIso());
+  if (date == null) return;
+  const text = window.prompt("日程内容：");
+  if (text == null || !text.trim()) return;
+  try {
+    await api("/api/personal/add-event", {
+      method: "POST",
+      body: JSON.stringify({ date: date.trim(), text: text.trim(), time: "" }),
+    });
+    state.calendar.selected = date.trim();
+    await loadPersonal();
+    showToast("日程已记录");
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+async function addQuickLinkFromPanel() {
+  const name = window.prompt("链接名称：");
+  if (name == null || !name.trim()) return;
+  const url = window.prompt("链接地址（http/https）：", "https://");
+  if (url == null || !url.trim()) return;
+  try {
+    await api("/api/personal/add-link", {
+      method: "POST",
+      body: JSON.stringify({ name: name.trim(), url: url.trim() }),
+    });
+    await loadPersonal();
+    showToast("常用链接已保存");
+  } catch (error) {
+    showToast(error.message, "error");
+  }
 }
 
 function skillTone(skill, index) {
@@ -1478,45 +1751,6 @@ async function deleteSkillUi(name) {
   } catch (error) {
     showToast(error.message, "error");
   }
-}
-
-async function loadFiles() {
-  try {
-    const result = await api("/api/files?limit=600");
-    state.files = result.files || [];
-    renderFiles(elements.fileSearch.value);
-  } catch (error) {
-    showToast(`无法读取工程文件：${error.message}`, "error");
-  }
-}
-
-async function openPreview(path) {
-  elements.previewTitle.textContent = path;
-  elements.previewContent.textContent = "读取中...";
-  elements.previewContent.classList.toggle("markdown-preview", path.toLowerCase().endsWith(".md"));
-  elements.previewBackdrop.classList.remove("hidden");
-  elements.previewDrawer.classList.remove("hidden");
-  try {
-    const result = await api(`/api/file?path=${encodeURIComponent(path)}`);
-    if (path.toLowerCase().endsWith(".md")) {
-      renderMarkdown(elements.previewContent, result.content);
-    } else {
-      elements.previewContent.classList.remove("markdown-body");
-      elements.previewContent.replaceChildren();
-      const pre = document.createElement("pre");
-      const code = document.createElement("code");
-      highlightInto(code, result.content);
-      pre.append(code);
-      elements.previewContent.append(pre);
-    }
-  } catch (error) {
-    elements.previewContent.textContent = `无法预览：${error.message}`;
-  }
-}
-
-function closePreview() {
-  elements.previewBackdrop.classList.add("hidden");
-  elements.previewDrawer.classList.add("hidden");
 }
 
 function estimateTextBytes(text) {
@@ -1813,6 +2047,10 @@ async function sendTask(prefilled = null) {
         if (event.type === "delta") {
           answerText += event.text || "";
           pendingText += event.text || "";
+        } else if (event.type === "activity") {
+          // Provider-side actions (e.g. Kimi builtin web search) that have no
+          // local tool events still surface in the activity panel.
+          setActivity(event.key || "activity", event.label || "处理中", "active");
         } else if (event.type === "notice") {
           showToast(event.message || "任务提示", "error");
           setActivity("notice", event.message || "任务提示", "failed");
@@ -1942,6 +2180,18 @@ function handleServerEvent(event) {
   }
   if (event.type === "steer_received") {
     setActivity("steer", "已收到补充引导，下一轮生效", "done");
+  }
+  if (event.type === "open_link") {
+    const href = safeLinkUrl(event.url || "");
+    if (href) {
+      const opened = window.open(href, "_blank", "noopener");
+      if (!opened) showToast(`浏览器拦截了弹出窗口，请手动打开：${event.name || href}`, "error");
+    }
+  }
+  if (event.type === "tool_finished" && event.ok
+      && ["add_calendar_entry", "delete_calendar_entry", "add_quick_link", "delete_quick_link"].includes(event.tool)) {
+    // The agent changed panel data mid-conversation: refresh calendar/links.
+    loadPersonal().catch(() => {});
   }
   if (event.type === "skill_imported" || event.type === "skill_deleted") {
     // A skill was created/installed/removed mid-session (possibly by the agent
@@ -2176,11 +2426,8 @@ function openSettings(section = "connection") {
     elements.model.value = state.config.model;
     elements.baseUrl.value = state.config.baseUrl || "";
     elements.root.value = state.config.root;
-    elements.webSearchInputs.forEach((input) => { input.checked = input.value === (state.config.webSearchMode || "auto"); });
-    elements.webSearchNetworkInputs.forEach((input) => { input.checked = input.value === (state.config.webSearchNetwork || "auto"); });
+    elements.webSearchEnabledToggle.checked = state.config.webSearchEnabled !== false;
     elements.autoMemoryToggle.checked = state.config.autoMemory !== false;
-    elements.searchProviderInputs.forEach((input) => { input.checked = input.value === (state.config.searchProvider || "none"); });
-    elements.searchApiKey.value = "";
   }
   switchSettingsSection(section);
   elements.apiKey.value = "";
@@ -2202,17 +2449,13 @@ async function saveSettings(event) {
     model: elements.model.value.trim(),
     baseUrl: elements.baseUrl.value.trim(),
     root: elements.root.value.trim(),
-    webSearchMode: selectedWebSearchMode(),
-    webSearchNetwork: selectedWebSearchNetwork(),
+    webSearchEnabled: elements.webSearchEnabledToggle.checked,
     autoMemory: elements.autoMemoryToggle.checked,
-    searchProvider: Array.from(elements.searchProviderInputs).find((input) => input.checked)?.value || "none",
-    searchApiKey: elements.searchApiKey.value.trim(),
   };
   try {
     const config = await api("/api/config", { method: "POST", body: JSON.stringify(payload) });
     updateConfig(config);
     closeSettings();
-    await loadFiles();
     await loadSessions();
     await loadCurrentSession(config.currentSessionId);
     appendMessage("system", "设置已更新。API Key 仅保存在当前本机进程内。关闭服务后需要重新输入。");
@@ -2252,7 +2495,7 @@ async function switchWorkspaceFolder() {
     return;
   }
   if (!state.config) return;
-  elements.workspaceSwitch.disabled = true;
+  elements.workdirChip.disabled = true;
   setUiBlocked(true, "正在切换工作目录…");
   try {
     const picked = await api("/api/pick-folder", {
@@ -2273,7 +2516,6 @@ async function switchWorkspaceFolder() {
       }),
     });
     updateConfig(config);
-    await loadFiles();
     await loadSessions();
     await loadCurrentSession(config.currentSessionId);
     appendMessage("system", `工作目录已切换到：\`${picked.path}\``);
@@ -2281,7 +2523,7 @@ async function switchWorkspaceFolder() {
   } catch (error) {
     showToast(error.message, "error");
   } finally {
-    elements.workspaceSwitch.disabled = false;
+    elements.workdirChip.disabled = false;
     setUiBlocked(false);
   }
 }
@@ -2389,7 +2631,6 @@ function bindEvents() {
   });
   elements.attachButton.addEventListener("click", () => elements.attachmentInput.click());
   elements.attachmentInput.addEventListener("change", () => addAttachments(elements.attachmentInput.files));
-  elements.fileSearch.addEventListener("input", () => renderFiles(elements.fileSearch.value));
   elements.sessionSearch.addEventListener("input", () => loadSessions(elements.sessionSearch.value));
   elements.settingsButton.addEventListener("click", () => openSettings());
   elements.refreshAudit.addEventListener("click", loadAudit);
@@ -2422,9 +2663,12 @@ function bindEvents() {
   elements.sessionManageDone.addEventListener("click", () => setSessionSelectMode(false));
   elements.sessionSelectAll.addEventListener("change", (event) => toggleSelectAllSessions(event.target.checked));
   elements.sessionDeleteSelected.addEventListener("click", deleteSelectedSessions);
-  elements.workspaceSwitch.addEventListener("click", switchWorkspaceFolder);
-  elements.closePreview.addEventListener("click", closePreview);
-  elements.previewBackdrop.addEventListener("click", closePreview);
+  elements.workdirChip.addEventListener("click", switchWorkspaceFolder);
+  elements.webSearchToggle.addEventListener("click", toggleWebSearch);
+  elements.calPrev.addEventListener("click", () => shiftCalendarMonth(-1));
+  elements.calNext.addEventListener("click", () => shiftCalendarMonth(1));
+  elements.addEventButton.addEventListener("click", addCalendarEventFromPanel);
+  elements.addLinkButton.addEventListener("click", addQuickLinkFromPanel);
   elements.sidebarToggle.addEventListener("click", () => toggleSidebar(true));
   elements.sidebarExpand.addEventListener("click", () => toggleSidebar(false));
   document.querySelectorAll("[data-task]").forEach((button) => {
@@ -2432,7 +2676,6 @@ function bindEvents() {
   });
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
-      closePreview();
       if (!elements.settingsModal.classList.contains("hidden")) closeSettings();
       if (!elements.skillsModal.classList.contains("hidden")) closeSkillsModal();
     }
@@ -2449,7 +2692,7 @@ async function initialize() {
   try {
     const config = await api("/api/config");
     updateConfig(config);
-    await Promise.all([loadFiles(), loadSessions()]);
+    await Promise.all([loadPersonal(), loadSessions()]);
     await loadCurrentSession(config.currentSessionId);
     state.eventTimer = window.setInterval(pollEvents, 650);
     pollEvents();

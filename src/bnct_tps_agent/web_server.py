@@ -22,6 +22,14 @@ from .agent import AgentRuntime
 from .audit import AuditLogger
 from .config import Settings
 from .memory import clear_auto_memory, memory_summary, merge_auto_memory, read_auto_memory, read_memory_context
+from .personal import (
+    add_calendar_entry,
+    add_quick_link,
+    delete_calendar_entry,
+    delete_quick_link,
+    list_calendar_entries,
+    list_quick_links,
+)
 from .project_tools import list_project_files, read_project_text
 from .providers import get_provider, public_provider_configs
 from .safety import Risk, SafetyPolicy
@@ -372,6 +380,7 @@ class ApplicationState:
                 data_dir=self.data_dir,
                 search_provider=self.settings.search_provider,
                 search_api_key=self.settings.search_api_key,
+                builtin_search=bool(get_provider(self.settings.provider).builtin_search_tool),
             )
             self._runtimes.clear()
             self.runtime = None
@@ -412,10 +421,14 @@ class ApplicationState:
             "baseUrl": self.settings.base_url or "",
             "apiKeyConfigured": bool(self.settings.api_key),
             "webSearchMode": self.settings.web_search_mode,
+            "webSearchEnabled": self.settings.web_search_mode != "off",
+            # Which engine actually serves searches: the provider's builtin
+            # (Kimi) or the app's own scraping/搜索 API pipeline.
+            "webSearchEngine": (
+                "builtin" if get_provider(self.settings.provider).builtin_search_tool else "local"
+            ),
             "webSearchNetwork": self.settings.web_search_network,
             "autoMemory": self.settings.auto_memory,
-            "searchProvider": self.settings.search_provider,
-            "searchApiKeyConfigured": bool(self.settings.search_api_key),
             "usageTotals": self.usage_totals(),
             "busy": self._session_lock(self.current_session_id).locked(),
             "busySessions": self._busy_sessions(),
@@ -485,6 +498,11 @@ class ApplicationState:
         base_url = str(payload.get("baseUrl") or "").strip() or profile.base_url
         submitted_key = str(payload.get("apiKey") or "").strip()
         existing_key = self._credentials.get(provider)
+        # The UI exposes one on/off switch; "ask" survives only via env config.
+        if "webSearchEnabled" in payload:
+            web_search_mode = "auto" if bool(payload.get("webSearchEnabled")) else "off"
+        else:
+            web_search_mode = str(payload.get("webSearchMode") or self.settings.web_search_mode)
         loaded = Settings.load(
             root,
             provider=provider,
@@ -492,7 +510,7 @@ class ApplicationState:
             base_url=base_url,
             api_key=submitted_key or existing_key,
             interactive=True,
-            web_search_mode=str(payload.get("webSearchMode") or self.settings.web_search_mode),
+            web_search_mode=web_search_mode,
             web_search_network=str(payload.get("webSearchNetwork") or self.settings.web_search_network),
             auto_memory=(
                 bool(payload.get("autoMemory"))
@@ -983,6 +1001,12 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/sessions":
                 query_text = str(query.get("query", [""])[0])
                 self._send_json(self.server.state.list_sessions(query_text))
+            elif parsed.path == "/api/personal":
+                data_dir = self.server.state.data_dir
+                self._send_json({
+                    "calendar": list_calendar_entries(data_dir)["entries"],
+                    "links": list_quick_links(data_dir)["links"],
+                })
             elif parsed.path == "/api/audit":
                 limit = min(max(int(query.get("limit", [200])[0]), 1), 1000)
                 self._send_json(self.server.state.read_audit_entries(limit))
@@ -1034,6 +1058,27 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
                 )
             elif parsed.path == "/api/memory/clear-auto":
                 self._send_json(self.server.state.clear_auto_memory())
+            elif parsed.path == "/api/personal/add-event":
+                self._send_json(add_calendar_entry(
+                    self.server.state.data_dir,
+                    str(payload.get("date") or ""),
+                    str(payload.get("text") or ""),
+                    str(payload.get("time") or ""),
+                ))
+            elif parsed.path == "/api/personal/delete-event":
+                self._send_json(delete_calendar_entry(
+                    self.server.state.data_dir, str(payload.get("id") or ""), ""
+                ))
+            elif parsed.path == "/api/personal/add-link":
+                self._send_json(add_quick_link(
+                    self.server.state.data_dir,
+                    str(payload.get("name") or ""),
+                    str(payload.get("url") or ""),
+                ))
+            elif parsed.path == "/api/personal/delete-link":
+                self._send_json(delete_quick_link(
+                    self.server.state.data_dir, str(payload.get("name") or "")
+                ))
             elif parsed.path == "/api/chat":
                 self._send_json(
                     self.server.state.chat(

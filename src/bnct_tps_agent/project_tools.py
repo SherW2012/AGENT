@@ -7,7 +7,13 @@ from pathlib import Path
 from typing import Any
 
 
-IGNORED_PARTS = {".git", ".venv", "node_modules", "__pycache__", ".bnct_agent"}
+IGNORED_PARTS = {".git", ".svn", ".venv", "node_modules", "__pycache__", ".bnct_agent"}
+# The local TPS sources are managed with SVN. The agent must never touch the
+# working-copy metadata (deterministic guard, not a prompt rule): corrupting
+# .svn wrecks the checkout, and version-control actions belong to the human.
+PROTECTED_VCS_PARTS = {".svn", ".git"}
+# Any svn invocation inside an agent-written script (svn.exe, "svn commit"...).
+SVN_COMMAND_RE = re.compile(r"(?i)\bsvn(?:\.exe)?\b")
 TEXT_SUFFIXES = {
     ".c",
     ".cc",
@@ -33,6 +39,11 @@ MAX_READ_BYTES = 1_000_000
 MAX_WRITE_BYTES = 1_000_000
 
 
+def ensure_not_vcs_path(path: Path) -> None:
+    if PROTECTED_VCS_PARTS.intersection(path.parts):
+        raise PermissionError("禁止访问版本控制元数据目录（.svn/.git）：版本控制操作由人工完成")
+
+
 def resolve_inside(root: Path, relative_path: str) -> Path:
     candidate = Path(relative_path)
     if candidate.is_absolute():
@@ -42,6 +53,7 @@ def resolve_inside(root: Path, relative_path: str) -> Path:
         resolved.relative_to(root.resolve())
     except ValueError as exc:
         raise ValueError("路径越过工程根目录") from exc
+    ensure_not_vcs_path(resolved)
     return resolved
 
 
@@ -50,6 +62,7 @@ def resolve_write_target(root: Path, path: str) -> tuple[Path, bool]:
     root = root.resolve()
     if candidate.is_absolute():
         resolved = candidate.resolve()
+        ensure_not_vcs_path(resolved)
         try:
             resolved.relative_to(root)
             return resolved, False
@@ -121,6 +134,10 @@ def write_project_text(root: Path, path: str, content: str) -> dict[str, Any]:
     target, outside_root = resolve_write_target(root, path)
     if target.suffix.lower() not in WRITE_SUFFIXES:
         raise ValueError("仅允许写入常见文本源文件和脚本（脚本写入需要更高级别审批）")
+    if target.suffix.lower() in SCRIPT_SUFFIXES and SVN_COMMAND_RE.search(content):
+        # Deterministic guard, not a prompt rule: the agent must never author a
+        # runnable script that performs SVN operations against the TPS checkout.
+        raise PermissionError("禁止写入包含 svn 命令的脚本：SVN 操作只能由人工执行")
     encoded = content.encode("utf-8")
     if len(encoded) > MAX_WRITE_BYTES:
         raise ValueError("写入内容超过 1 MB 上限")

@@ -22,6 +22,10 @@ class ProviderProfile:
     #   "none"   - the provider's chat API is text-only
     vision: str = "none"
     vision_model: str | None = None
+    # Provider-side web search: the name of the builtin tool the model itself
+    # executes (Kimi/Moonshot's "$web_search"). None means the provider has no
+    # builtin search and the local scraping web_search tool is used instead.
+    builtin_search_tool: str | None = None
 
     def resolve_vision_model(self) -> str | None:
         """Vision model for image turns; env var overrides the profile default
@@ -44,6 +48,7 @@ class ProviderProfile:
             "keyHint": self.key_hint,
             "vision": self.vision,
             "visionModel": self.resolve_vision_model() or "",
+            "builtinSearch": bool(self.builtin_search_tool),
         }
 
 
@@ -86,6 +91,7 @@ PROVIDERS: dict[str, ProviderProfile] = {
         key_hint="Kimi API Key",
         vision="switch",
         vision_model="moonshot-v1-32k-vision-preview",
+        builtin_search_tool="$web_search",
     ),
 }
 

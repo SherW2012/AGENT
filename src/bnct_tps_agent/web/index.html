@@ -98,6 +98,31 @@
 
         <div class="composer-zone">
           <div class="attachment-list hidden" id="attachment-list"></div>
+          <div class="composer-topbar">
+            <button class="workdir-chip" id="workdir-chip" type="button" title="点击切换工作目录">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10h-17z"/></svg>
+              <span class="workdir-label">工作目录</span>
+              <span class="workdir-path" id="workdir-path"></span>
+            </button>
+            <button class="net-toggle" id="web-search-toggle" type="button" title="开启/关闭联网搜索（与设置页同步）">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg>
+              <span id="web-search-toggle-label">联网搜索</span>
+            </button>
+            <div class="topbar-spacer"></div>
+            <div class="mascot" id="mascot" title="BNCT Agent" aria-hidden="true">
+              <svg viewBox="0 0 44 36">
+                <g class="mascot-body">
+                  <rect x="6" y="8" width="32" height="22" rx="7" />
+                  <rect class="mascot-ear" x="12" y="3" width="6" height="8" rx="3" />
+                  <rect class="mascot-ear" x="26" y="3" width="6" height="8" rx="3" />
+                  <rect class="mascot-leg" x="12" y="28" width="6" height="7" rx="3" />
+                  <rect class="mascot-leg mascot-leg-b" x="26" y="28" width="6" height="7" rx="3" />
+                  <circle class="mascot-eye" cx="16.5" cy="18" r="2.4" />
+                  <circle class="mascot-eye" cx="27.5" cy="18" r="2.4" />
+                </g>
+              </svg>
+            </div>
+          </div>
           <div class="composer" id="composer">
             <textarea id="prompt-input" rows="1" placeholder="给 BNCT Agent 一个任务..." aria-label="任务输入"></textarea>
             <div class="composer-footer">
@@ -120,28 +145,34 @@
       </main>
 
       <aside class="workspace-panel">
-        <section class="workspace-card workspace-overview">
+        <section class="workspace-card personal-card">
           <div class="workspace-heading">
             <div>
-              <span class="eyebrow">WORKSPACE</span>
-              <h2 id="workspace-name">Loading workspace</h2>
+              <span class="eyebrow">CALENDAR</span>
+              <h2>日历</h2>
             </div>
             <div class="workspace-actions">
-              <span class="count-badge" id="file-count">0</span>
-              <button class="workspace-switch-button" id="workspace-switch-button" type="button" title="切换工作目录" aria-label="切换工作目录">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v10h-17z"/><path d="M3.5 9h17"/><path d="m15 13 3 3-3 3M18 16H9"/></svg>
-              </button>
+              <button class="panel-mini-button" id="add-event-button" type="button" title="记录日程">＋</button>
             </div>
           </div>
-          <div class="workspace-chip" id="workspace-chip" title="当前工程">
-            <span class="status-dot"></span>
-            <span id="workspace-path">正在读取工程目录</span>
+          <div class="calendar-head">
+            <button class="cal-nav" id="cal-prev" type="button" aria-label="上个月">‹</button>
+            <strong id="cal-title">—</strong>
+            <button class="cal-nav" id="cal-next" type="button" aria-label="下个月">›</button>
           </div>
-          <div class="file-search-wrap">
-            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
-            <input id="file-search" type="search" placeholder="搜索文件" autocomplete="off" />
+          <div class="calendar-grid" id="calendar-grid" aria-label="月历"></div>
+          <div class="calendar-entries" id="calendar-entries" aria-label="日程列表"></div>
+
+          <div class="workspace-heading links-heading">
+            <div>
+              <span class="eyebrow">LINKS</span>
+              <h2>常用链接</h2>
+            </div>
+            <div class="workspace-actions">
+              <button class="panel-mini-button" id="add-link-button" type="button" title="添加常用链接">＋</button>
+            </div>
           </div>
-          <div class="file-list" id="file-list" aria-label="工程文件"></div>
+          <div class="quick-links" id="quick-links" aria-label="常用链接"></div>
         </section>
 
         <section class="workspace-card skill-card-panel">
@@ -160,20 +191,6 @@
         </section>
       </aside>
     </div>
-
-    <div class="drawer-backdrop hidden" id="preview-backdrop"></div>
-    <aside class="preview-drawer hidden" id="preview-drawer" aria-label="文件预览">
-      <div class="drawer-header">
-        <div>
-          <span class="eyebrow">FILE PREVIEW</span>
-          <h2 id="preview-title">文件预览</h2>
-        </div>
-        <button class="icon-button" id="close-preview-button" type="button" aria-label="关闭预览">
-          <svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
-        </button>
-      </div>
-      <div class="file-preview" id="preview-content"></div>
-    </aside>
 
     <div class="modal-backdrop hidden" id="skills-modal">
       <div class="modal-card skills-modal-card" role="dialog" aria-modal="true" aria-labelledby="skills-modal-title">
@@ -217,7 +234,7 @@
             </button>
             <button class="settings-tab" type="button" data-settings-section="web-search">
               <span>联网搜索</span>
-              <small>自动搜索与审批策略</small>
+              <small>开关与搜索通道说明</small>
             </button>
             <button class="settings-tab" type="button" data-settings-section="memory">
               <span>记忆</span>
@@ -292,63 +309,14 @@
 
             <section class="settings-section" data-settings-section-panel="web-search">
               <div class="settings-section-heading">
-                <h3>联网搜索策略</h3>
+                <h3>联网搜索</h3>
                 <p>用于获取公开网页上的近期信息。涉及患者信息、密钥、内部路径或公司机密时不会自动搜索。</p>
               </div>
-              <fieldset class="web-search-picker">
-                <legend>搜索模式</legend>
-                <label class="web-search-option">
-                  <input type="radio" name="web-search-mode" value="auto" />
-                  <span><strong>Auto</strong><small>需要最新公开知识时自动搜索</small></span>
-                </label>
-                <label class="web-search-option">
-                  <input type="radio" name="web-search-mode" value="ask" />
-                  <span><strong>Ask</strong><small>每次搜索前请求人工批准</small></span>
-                </label>
-                <label class="web-search-option">
-                  <input type="radio" name="web-search-mode" value="off" />
-                  <span><strong>Off</strong><small>禁用公共联网搜索工具</small></span>
-                </label>
-              </fieldset>
-              <fieldset class="web-search-picker">
-                <legend>网络通道</legend>
-                <label class="web-search-option">
-                  <input type="radio" name="web-search-network" value="auto" />
-                  <span><strong>Auto</strong><small>先用系统代理，失败后尝试直连</small></span>
-                </label>
-                <label class="web-search-option">
-                  <input type="radio" name="web-search-network" value="direct" />
-                  <span><strong>Direct</strong><small>绕过本机代理，适合代理返回 410 时</small></span>
-                </label>
-                <label class="web-search-option">
-                  <input type="radio" name="web-search-network" value="system" />
-                  <span><strong>System</strong><small>只使用系统/环境变量代理</small></span>
-                </label>
-              </fieldset>
-              <fieldset class="web-search-picker">
-                <legend>搜索来源</legend>
-                <label class="web-search-option">
-                  <input type="radio" name="search-provider" value="none" />
-                  <span><strong>内置抓取</strong><small>免费，无需 Key；质量有限</small></span>
-                </label>
-                <label class="web-search-option">
-                  <input type="radio" name="search-provider" value="bocha" />
-                  <span><strong>博查 Bocha</strong><small>国内直连，中文效果好（付费）</small></span>
-                </label>
-                <label class="web-search-option">
-                  <input type="radio" name="search-provider" value="tavily" />
-                  <span><strong>Tavily</strong><small>面向 Agent，有免费额度</small></span>
-                </label>
-                <label class="web-search-option">
-                  <input type="radio" name="search-provider" value="brave" />
-                  <span><strong>Brave</strong><small>有免费额度，需国际网络</small></span>
-                </label>
-              </fieldset>
-              <label>
-                <span>搜索 API Key <em>选择非内置来源时必填</em></span>
-                <input id="search-api-key-input" type="password" placeholder="仅保存在本次本机进程内" autocomplete="off" />
+              <label class="toggle-row">
+                <input type="checkbox" id="web-search-enabled-toggle" />
+                <span><strong>开启联网搜索</strong><small>需要最新公开信息时由模型自动判断是否搜索；对话框上方有同款快捷开关。</small></span>
               </label>
-              <p class="settings-help">默认建议使用 Auto：只有问题明显依赖近期公开信息时才会触发搜索；如果用户明确要求不联网，应遵循用户指令。配置正规搜索 API 后结果质量显著优于内置抓取；API 调用失败会自动回退到内置抓取。</p>
+              <p class="settings-help" id="web-search-engine-help">搜索通道由所选模型决定：使用 Kimi 时走 Kimi 模型自带的联网搜索（效果最好，按 Kimi 平台计费）；使用 DeepSeek 等无自带搜索的模型时走内置搜索。用户明确要求不联网时，Agent 会遵循指令。</p>
             </section>
 
             <section class="settings-section" data-settings-section-panel="memory">

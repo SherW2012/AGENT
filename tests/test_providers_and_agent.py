@@ -268,6 +268,67 @@ class ProviderAndAgentTests(unittest.TestCase):
         # The stored answer stays clean (no leading separator).
         self.assertEqual(events[-1]["answer"], "查完了")
 
+    def test_kimi_builtin_web_search_is_offered_and_echoed(self):
+        # Round 1: the model invokes its builtin $web_search; we must echo the
+        # arguments back verbatim (Moonshot contract). Round 2: the answer.
+        round_one = [
+            SimpleNamespace(
+                id="r",
+                choices=[SimpleNamespace(
+                    delta=SimpleNamespace(
+                        content=None,
+                        tool_calls=[SimpleNamespace(
+                            index=0,
+                            id="call-ws",
+                            type="builtin_function",
+                            function=SimpleNamespace(name="$web_search", arguments='{"search_id":"abc"}'),
+                        )],
+                    ),
+                    finish_reason="tool_calls",
+                )],
+            ),
+        ]
+        round_two = [
+            SimpleNamespace(id="r", choices=[SimpleNamespace(delta=SimpleNamespace(content="搜到了"), finish_reason="stop")]),
+        ]
+        completions = FakeStreamingCompletions([round_one, round_two])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        registry = FakeRegistry()
+        settings = Settings.load(self.root, provider="kimi", api_key="test-key")
+        audit = AuditLogger(self.root / "tests" / "runtime_output" / "builtin-search-audit")
+
+        events = list(AgentRuntime(settings, registry, audit, client=client).run_events("最新的 BNCT 进展"))
+
+        self.assertEqual(events[-1]["answer"], "搜到了")
+        # The builtin tool was offered alongside local tools.
+        offered = completions.requests[0]["tools"]
+        self.assertIn(
+            {"type": "builtin_function", "function": {"name": "$web_search"}},
+            offered,
+        )
+        # The echo went back verbatim and the local registry was NOT called.
+        tool_message = completions.requests[1]["messages"][-1]
+        self.assertEqual(tool_message["role"], "tool")
+        self.assertEqual(tool_message["content"], '{"search_id":"abc"}')
+        self.assertEqual(registry.calls, [])
+        # An activity event surfaced for the UI.
+        self.assertTrue(any(event.get("type") == "activity" for event in events))
+
+    def test_builtin_search_not_offered_when_search_disabled_or_unsupported(self):
+        registry = FakeRegistry()
+        audit = AuditLogger(self.root / "tests" / "runtime_output" / "builtin-flag-audit")
+        client = SimpleNamespace(chat=SimpleNamespace(completions=FakeStreamingCompletions([])))
+        kimi_off = Settings.load(self.root, provider="kimi", api_key="k", web_search_mode="off")
+        self.assertEqual(
+            AgentRuntime(kimi_off, registry, audit, client=client)._chat_tools(),
+            registry.chat_schemas,
+        )
+        deepseek_on = Settings.load(self.root, provider="deepseek", api_key="d", web_search_mode="auto")
+        self.assertEqual(
+            AgentRuntime(deepseek_on, registry, audit, client=client)._chat_tools(),
+            registry.chat_schemas,
+        )
+
     def test_mid_task_steering_is_injected_before_next_round(self):
         round_one = [
             SimpleNamespace(

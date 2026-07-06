@@ -18,6 +18,15 @@ from .project_tools import (
     write_project_text,
 )
 from .office_tools import create_excel, create_powerpoint, create_word_document
+from .personal import (
+    add_calendar_entry,
+    add_quick_link,
+    delete_calendar_entry,
+    delete_quick_link,
+    list_calendar_entries,
+    list_quick_links,
+    resolve_quick_link,
+)
 from .safety import PolicyDenied, Risk, SafetyPolicy
 from .skills import SkillRegistry
 from .tps_tools import summarize_plan_snapshot, validate_plan_snapshot
@@ -76,6 +85,7 @@ class ToolRegistry:
         data_dir: Path | None = None,
         search_provider: str = "none",
         search_api_key: str | None = None,
+        builtin_search: bool = False,
     ):
         self.root = root
         self.policy = policy
@@ -87,6 +97,10 @@ class ToolRegistry:
         self.web_search_network = web_search_network
         self.search_provider = search_provider
         self.search_api_key = search_api_key
+        # When the model provider has its own builtin web search (Kimi), the
+        # local scraping web_search tool is redundant and worse -- skip it.
+        # fetch_url (explicit URL) stays available either way.
+        self.builtin_search = builtin_search
         self._tools = {tool.name: tool for tool in self._build_tools()}
 
     def _emit(self, event: dict[str, Any]) -> None:
@@ -172,6 +186,76 @@ class ToolRegistry:
                 {**object_schema, "properties": {"match": {"type": "string"}}, "required": ["match"]},
                 Risk.READ,
                 lambda root, match: forget_agent_memory(root, self.data_dir, match),
+            ),
+            Tool(
+                "add_calendar_entry",
+                "Record a calendar entry (a passive note, nothing fires automatically) when the user asks to "
+                "note down an appointment, deadline or agenda item. date is 'YYYY-MM-DD'; time is 'HH:MM' or "
+                "an empty string. The panel calendar updates immediately. The user's request is the consent.",
+                {
+                    **object_schema,
+                    "properties": {
+                        "date": {"type": "string"},
+                        "text": {"type": "string"},
+                        "time": {"type": "string"},
+                    },
+                    "required": ["date", "text", "time"],
+                },
+                Risk.READ,
+                lambda root, date, text, time: add_calendar_entry(self.data_dir, date, text, time),
+            ),
+            Tool(
+                "list_calendar_entries",
+                "List the user's recorded calendar entries (date, time, text).",
+                {**object_schema, "properties": {}, "required": []},
+                Risk.READ,
+                lambda root: list_calendar_entries(self.data_dir),
+            ),
+            Tool(
+                "delete_calendar_entry",
+                "Delete calendar entries by id, or by a text fragment (>=2 chars) contained in the entry. "
+                "Pass the unused argument as an empty string.",
+                {
+                    **object_schema,
+                    "properties": {"id": {"type": "string"}, "match": {"type": "string"}},
+                    "required": ["id", "match"],
+                },
+                Risk.READ,
+                lambda root, id, match: delete_calendar_entry(self.data_dir, id, match),
+            ),
+            Tool(
+                "add_quick_link",
+                "Save a named quick link (http/https URL) to the user's panel when they ask to remember a "
+                "link. Saving an existing name replaces its URL.",
+                {
+                    **object_schema,
+                    "properties": {"name": {"type": "string"}, "url": {"type": "string"}},
+                    "required": ["name", "url"],
+                },
+                Risk.READ,
+                lambda root, name, url: add_quick_link(self.data_dir, name, url),
+            ),
+            Tool(
+                "list_quick_links",
+                "List the user's saved quick links (name and URL).",
+                {**object_schema, "properties": {}, "required": []},
+                Risk.READ,
+                lambda root: list_quick_links(self.data_dir),
+            ),
+            Tool(
+                "delete_quick_link",
+                "Delete a saved quick link by its exact name.",
+                {**object_schema, "properties": {"name": {"type": "string"}}, "required": ["name"]},
+                Risk.READ,
+                lambda root, name: delete_quick_link(self.data_dir, name),
+            ),
+            Tool(
+                "open_quick_link",
+                "Open one of the user's saved quick links in their browser (matched by name, fuzzy allowed). "
+                "Use when the user says 打开 + a saved link name.",
+                {**object_schema, "properties": {"name": {"type": "string"}}, "required": ["name"]},
+                Risk.READ,
+                self._open_quick_link,
             ),
             Tool(
                 "list_agent_skills",
@@ -386,6 +470,7 @@ class ToolRegistry:
                     risk_resolver=self._fetch_url_risk,
                 )
             )
+        if self.web_search_mode != "off" and not self.builtin_search:
             tools.append(
                 Tool(
                     "web_search",
@@ -421,6 +506,13 @@ class ToolRegistry:
                 )
             )
         return tools
+
+    def _open_quick_link(self, _root: Path, name: str) -> dict[str, Any]:
+        resolved = resolve_quick_link(self.data_dir, name)
+        # The frontend watches this event and opens the (http/https-validated)
+        # URL in a new tab; the backend never launches a browser itself.
+        self._emit({"type": "open_link", "name": resolved["name"], "url": resolved["url"]})
+        return resolved
 
     def _write_text_risk(self, arguments: dict[str, Any]) -> Risk:
         suffix = Path(str(arguments.get("path") or "")).suffix.lower()

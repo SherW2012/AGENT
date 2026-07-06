@@ -28,6 +28,34 @@ class ProjectToolTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             write_project_text(self.root, "tests/runtime_output/payload.exe", "not binary")
 
+    def test_svn_metadata_paths_are_blocked(self):
+        # The TPS checkout is SVN-managed: .svn is untouchable, read or write.
+        with self.assertRaises(PermissionError):
+            resolve_inside(self.root, ".svn/entries")
+        with self.assertRaises(PermissionError):
+            resolve_inside(self.root, "src/.svn/wc.db")
+        with self.assertRaises(PermissionError):
+            resolve_write_target(self.root, str(self.root / ".svn" / "tmp.txt"))
+        with self.assertRaises(PermissionError):
+            write_project_text(self.root, ".svn/hook.md", "x")
+
+    def test_agent_written_scripts_may_not_contain_svn_commands(self):
+        with self.assertRaises(PermissionError):
+            write_project_text(
+                self.root,
+                "tests/runtime_output/sync.bat",
+                "@echo off\nsvn revert -R .\nsvn update\n",
+            )
+        with self.assertRaises(PermissionError):
+            write_project_text(
+                self.root,
+                "tests/runtime_output/sync2.sh",
+                "#!/bin/sh\n/usr/bin/svn commit -m auto\n",
+            )
+        # Plain text mentioning svn is fine -- only runnable scripts are guarded.
+        result = write_project_text(self.root, "tests/runtime_output/notes-svn.md", "svn 由人工操作")
+        self.assertIn(result["operation"], {"created", "updated"})
+
 
 if __name__ == "__main__":
     unittest.main()
