@@ -22,12 +22,13 @@ const state = {
   currentSessionId: null,
   currentApproval: null,
   pendingAttachments: [],
-  activeDraft: null,
+  // Live runs owned by THIS tab, keyed by session id. Each run carries its
+  // own stream controller and draft DOM, so parallel sessions can never write
+  // into each other's conversation: sessionId -> {controller, draft, stopped}.
+  runs: new Map(),
   busy: false,
   eventTimer: null,
   lastEventId: 0,
-  abortController: null,
-  stopped: false,
   lastSubmission: null,
   dragDepth: 0,
   selectMode: false,
@@ -750,13 +751,7 @@ function addMessageActions(article, rawText, retryTask) {
     const retryLabel = document.createElement("span");
     retryLabel.textContent = "重试";
     retryBtn.append(svgIcon(["M20 11a8 8 0 1 0-2.1 5.4", "M20 5v6h-6"]), retryLabel);
-    retryBtn.addEventListener("click", () => {
-      if (state.busy) {
-        showToast("当前任务仍在执行", "error");
-        return;
-      }
-      sendTask(retryTask);
-    });
+    retryBtn.addEventListener("click", () => resendInterrupting(retryTask));
     row.append(retryBtn);
   }
   // User bubbles stay compact: the action row lives below the bubble (as an
@@ -807,12 +802,10 @@ function enterUserMessageEdit(article, rawText) {
   const submit = () => {
     const text = area.value.trim();
     if (!text) return;
-    if (state.busy) {
-      showToast("当前任务仍在执行，请先停止或等它完成", "error");
-      return;
-    }
     exitEdit();
-    sendTask(text);
+    // Editing during a run means "stop that answer and re-think with my new
+    // wording" -- interrupt, then re-ask in this same session.
+    resendInterrupting(text);
   };
   cancel.addEventListener("click", exitEdit);
   confirm.addEventListener("click", submit);
@@ -919,8 +912,8 @@ function toolDisplayName(name) {
   return labels[name] || name || "工具调用";
 }
 
-function appendAssistantDraft() {
-  const article = appendMessage("assistant", "", { id: "streaming-message" });
+function appendAssistantDraft(sessionId) {
+  const article = appendMessage("assistant", "", {});
   const meta = article.querySelector(".message-meta");
   const content = article.querySelector(".message-content");
   meta.textContent = "BNCT Agent 正在处理";
@@ -938,7 +931,7 @@ function appendAssistantDraft() {
   activity.append(title, list);
   article.querySelector(".message-body").append(activity);
 
-  state.activeDraft = {
+  const draft = {
     article,
     meta,
     content,
@@ -948,42 +941,42 @@ function appendAssistantDraft() {
     activities: [],
     // Which session this stream belongs to: switching away detaches the
     // article, switching back re-attaches it so live output is never lost.
-    session: state.currentSessionId,
+    session: sessionId,
   };
-  setActivity("agent", "正在理解任务", "active");
-  return article;
+  setActivity(draft, "agent", "正在理解任务", "active");
+  return draft;
 }
 
-function setDraftText(text) {
-  if (!state.activeDraft) return;
-  renderMarkdown(state.activeDraft.content, text);
-  // Only auto-follow while the user is at the bottom; if they scrolled up to
-  // read something, leave their viewport alone.
-  if (state.stickToBottom) {
+function setDraftText(draft, text) {
+  if (!draft) return;
+  renderMarkdown(draft.content, text);
+  // Only auto-follow while the user is at the bottom AND actually viewing this
+  // draft's session; never scroll someone reading another conversation.
+  if (state.stickToBottom && draft.session === state.currentSessionId) {
     elements.conversation.scrollTo({ top: elements.conversation.scrollHeight });
   }
 }
 
-function setActivity(key, label, status = "active", detail = "") {
-  if (!state.activeDraft) return;
-  const existing = state.activeDraft.activities.find((item) => item.key === key);
+function setActivity(draft, key, label, status = "active", detail = "") {
+  if (!draft) return;
+  const existing = draft.activities.find((item) => item.key === key);
   const item = existing || { key, label, status, detail };
   item.label = label;
   item.status = status;
   item.detail = detail;
-  if (!existing) state.activeDraft.activities.push(item);
-  renderActivity();
+  if (!existing) draft.activities.push(item);
+  renderActivity(draft);
 }
 
-function renderActivity() {
-  if (!state.activeDraft) return;
-  const active = state.activeDraft.activities.find((item) => item.status === "active");
-  const waiting = state.activeDraft.activities.find((item) => item.status === "waiting");
-  const current = waiting || active || state.activeDraft.activities.at(-1);
-  state.activeDraft.activityTitle.textContent = current?.label || "正在处理";
-  state.activeDraft.activityList.replaceChildren();
-  const history = state.activeDraft.activities.filter((item) => item !== current).slice(-5);
-  state.activeDraft.activityList.classList.toggle("hidden", history.length === 0);
+function renderActivity(draft) {
+  if (!draft) return;
+  const active = draft.activities.find((item) => item.status === "active");
+  const waiting = draft.activities.find((item) => item.status === "waiting");
+  const current = waiting || active || draft.activities.at(-1);
+  draft.activityTitle.textContent = current?.label || "正在处理";
+  draft.activityList.replaceChildren();
+  const history = draft.activities.filter((item) => item !== current).slice(-5);
+  draft.activityList.classList.toggle("hidden", history.length === 0);
   history.forEach((item) => {
     const row = document.createElement("div");
     row.className = `activity-item ${item.status}`;
@@ -992,34 +985,31 @@ function renderActivity() {
     const text = document.createElement("span");
     text.textContent = item.detail ? `${item.label}：${item.detail}` : item.label;
     row.append(dot, text);
-    state.activeDraft.activityList.append(row);
+    draft.activityList.append(row);
   });
 }
 
-function finalizeAssistantDraft(rawText = "", options = {}) {
-  if (!state.activeDraft) return;
-  const draft = state.activeDraft;
+function finalizeAssistantDraft(draft, rawText = "", options = {}) {
+  if (!draft || draft.finalized) return;
+  draft.finalized = true;
   let metaText = options.stopped ? "BNCT Agent · 已停止" : "BNCT Agent";
   const usage = options.usage;
   if (usage && (usage.promptTokens || usage.completionTokens)) {
     metaText += ` · ↑${usage.promptTokens} ↓${usage.completionTokens} tokens`;
   }
   draft.meta.textContent = metaText;
-  setActivity("agent", options.stopped ? "已停止" : "已完成", options.stopped ? "failed" : "done");
+  setActivity(draft, "agent", options.stopped ? "已停止" : "已完成", options.stopped ? "failed" : "done");
   draft.activity.classList.add("done");
   if (options.stopped) draft.activity.classList.add("failed");
-  draft.article.removeAttribute("id");
   addMessageActions(draft.article, rawText, draft.task || "");
-  state.activeDraft = null;
 }
 
-function failAssistantDraft(message) {
-  if (!state.activeDraft) return;
-  state.activeDraft.meta.textContent = "BNCT Agent 已中断";
-  setActivity("agent", "任务失败", "failed", message);
-  state.activeDraft.activity.classList.add("failed");
-  state.activeDraft.article.removeAttribute("id");
-  state.activeDraft = null;
+function failAssistantDraft(draft, message) {
+  if (!draft || draft.finalized) return;
+  draft.finalized = true;
+  draft.meta.textContent = "BNCT Agent 已中断";
+  setActivity(draft, "agent", "任务失败", "failed", message);
+  draft.activity.classList.add("failed");
 }
 
 function resizePrompt() {
@@ -1169,8 +1159,7 @@ function renderConversation(session) {
   // A live stream owned by this tab for THIS session: re-attach its draft
   // article so switching away and back keeps showing thinking + output live
   // (the stream keeps writing into the same DOM node while detached).
-  const liveDraft = state.activeDraft && state.abortController
-    && state.activeDraft.session === session.id ? state.activeDraft : null;
+  const liveDraft = state.runs.get(session.id)?.draft || null;
   const messages = session.messages || [];
   if (!messages.length && !liveDraft) {
     showEmptyState();
@@ -1994,10 +1983,11 @@ function storedAttachmentMetadata(items) {
 }
 
 async function sendTask(prefilled = null) {
+  const sessionId = state.currentSessionId;
   const attachments = [...state.pendingAttachments];
   const typedTask = String(prefilled ?? elements.prompt.value).trim();
   const task = typedTask || (attachments.length ? "请阅读附件内容。" : "");
-  if (!task || state.busy) return;
+  if (!task || state.busy || state.runs.has(sessionId)) return;
   if (!state.config?.apiKeyConfigured) {
     appendMessage("system", `需要先配置 ${state.config?.providerLabel || "模型供应商"} 的 API Key。请打开左下角设置，也可以切换到其他供应商。`);
     openSettings();
@@ -2012,11 +2002,15 @@ async function sendTask(prefilled = null) {
   state.lastSubmission = { typed: typedTask, prefilled, attachments };
   state.stickToBottom = true;
   appendMessage("user", task, { attachments: attachmentMetadata, withActions: true });
-  appendAssistantDraft();
-  if (state.activeDraft) state.activeDraft.task = task;
-  state.abortController = new AbortController();
-  state.stopped = false;
+  const draft = appendAssistantDraft(sessionId);
+  draft.task = task;
+  const runState = { controller: new AbortController(), draft, stopped: false };
+  state.runs.set(sessionId, runState);
   setBusy(true);
+  // Everything below writes through THIS run's draft, never a global one:
+  // the user may switch sessions (and even start a second run there) while
+  // this stream is still arriving.
+  const viewingThisRun = () => state.currentSessionId === sessionId;
   let answerText = "";
   let completed = false;
   // Smooth typewriter: providers like Kimi emit bursty chunks with long gaps,
@@ -2029,7 +2023,7 @@ async function sendTask(prefilled = null) {
     const step = Math.max(4, Math.ceil(pendingText.length / 10));
     displayedText += pendingText.slice(0, step);
     pendingText = pendingText.slice(step);
-    setDraftText(displayedText);
+    setDraftText(draft, displayedText);
   }, 33);
   const flushSmooth = () => {
     displayedText += pendingText;
@@ -2039,7 +2033,7 @@ async function sendTask(prefilled = null) {
     await streamApi(
       "/api/chat-stream",
       {
-        sessionId: state.currentSessionId,
+        sessionId,
         task,
         attachments,
       },
@@ -2050,51 +2044,56 @@ async function sendTask(prefilled = null) {
         } else if (event.type === "activity") {
           // Provider-side actions (e.g. Kimi builtin web search) that have no
           // local tool events still surface in the activity panel.
-          setActivity(event.key || "activity", event.label || "处理中", "active");
+          setActivity(draft, event.key || "activity", event.label || "处理中", "active");
         } else if (event.type === "notice") {
-          showToast(event.message || "任务提示", "error");
-          setActivity("notice", event.message || "任务提示", "failed");
+          if (viewingThisRun()) showToast(event.message || "任务提示", "error");
+          setActivity(draft, "notice", event.message || "任务提示", "failed");
         } else if (event.type === "done") {
           completed = true;
           flushSmooth();
-          const stopped = Boolean(event.stopped) || state.stopped;
+          const stopped = Boolean(event.stopped) || runState.stopped;
           answerText = event.answer || answerText || "模型未返回文本结果。";
-          setDraftText(answerText);
-          if (event.session) {
-            state.currentSessionId = event.session.id;
-          }
-          finalizeAssistantDraft(answerText, { stopped, usage: event.usage });
-          if (stopped) restoreLastSubmission();
+          setDraftText(draft, answerText);
+          finalizeAssistantDraft(draft, answerText, { stopped, usage: event.usage });
+          if (stopped && viewingThisRun()) restoreLastSubmission();
         }
       },
-      state.abortController.signal,
+      runState.controller.signal,
     );
     if (!completed) {
       flushSmooth();
-      setDraftText(answerText || "模型未返回文本结果。");
-      finalizeAssistantDraft(answerText);
+      setDraftText(draft, answerText || "模型未返回文本结果。");
+      finalizeAssistantDraft(draft, answerText);
     }
     await loadSessions();
   } catch (error) {
     flushSmooth();
-    if (answerText) setDraftText(answerText);
-    if (error.name === "AbortError" || state.stopped) {
-      finalizeAssistantDraft(answerText, { stopped: true });
-      restoreLastSubmission();
-      showToast("已停止。可以编辑问题后重新发送。");
+    if (answerText) setDraftText(draft, answerText);
+    if (error.name === "AbortError" || runState.stopped) {
+      finalizeAssistantDraft(draft, answerText, { stopped: true });
+      if (viewingThisRun()) {
+        restoreLastSubmission();
+        showToast("已停止。可以编辑问题后重新发送。");
+      }
       try {
         await loadSessions();
       } catch (_error) {
         // Listing can briefly fail right after a stop; the next poll recovers.
       }
     } else {
-      failAssistantDraft(error.message);
-      appendMessage("system", `任务失败：${error.message}`);
+      failAssistantDraft(draft, error.message);
+      if (viewingThisRun()) {
+        appendMessage("system", `任务失败：${error.message}`);
+      } else {
+        showToast(`后台会话任务失败：${error.message}`, "error");
+      }
     }
   } finally {
     window.clearInterval(smoothTimer);
-    state.abortController = null;
-    setBusy(false);
+    state.runs.delete(sessionId);
+    // Only reset the composer/busy state if the user is still looking at this
+    // run's session; another session may have its own run in flight.
+    if (viewingThisRun()) setBusy(false);
   }
 }
 
@@ -2116,11 +2115,12 @@ async function sendSteer() {
 }
 
 function stopTask() {
-  if (!state.busy) return;
-  state.stopped = true;
-  if (state.abortController) {
+  const run = state.runs.get(state.currentSessionId);
+  if (!run && !state.busy) return;
+  if (run) {
+    run.stopped = true;
     try {
-      state.abortController.abort();
+      run.controller.abort();
     } catch (_error) {
       // Ignore: the fetch may have already settled.
     }
@@ -2129,6 +2129,47 @@ function stopTask() {
     method: "POST",
     body: JSON.stringify({ sessionId: state.currentSessionId }),
   }).catch(() => {});
+}
+
+async function waitForSessionIdle(sessionId, timeoutMs = 10000) {
+  // "Idle" needs BOTH sides: our stream handler finished (runs map cleared)
+  // and the server released the session lock, or an immediate re-send 409s.
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!state.runs.has(sessionId)) {
+      try {
+        const config = await api("/api/config");
+        if (!(config.busySessions || []).includes(sessionId)) return true;
+      } catch (_error) {
+        // Transient; retry until the deadline.
+      }
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+  }
+  return false;
+}
+
+async function resendInterrupting(text) {
+  // Claude-style edit/retry mid-run: interrupt the current answer for this
+  // session, wait for it to actually stop, then re-ask in the SAME session.
+  const sessionId = state.currentSessionId;
+  if (state.runs.has(sessionId) || state.busy) {
+    showToast("正在停止当前回答，随后重新提问…");
+    stopTask();
+    const idle = await waitForSessionIdle(sessionId);
+    if (!idle) {
+      showToast("当前任务未能及时停止，请稍后再试", "error");
+      return;
+    }
+    if (state.currentSessionId !== sessionId) return;
+  }
+  // The stop above restored the previous submission into the composer; the
+  // edited question replaces it entirely.
+  state.pendingAttachments = [];
+  renderPendingAttachments();
+  elements.prompt.value = "";
+  resizePrompt();
+  sendTask(text);
 }
 
 function restoreLastSubmission() {
@@ -2144,42 +2185,50 @@ function restoreLastSubmission() {
   elements.prompt.focus();
 }
 
+function draftForEvent(event) {
+  // Route server events to the draft of the session that emitted them; events
+  // without a session tag fall back to the currently viewed session's run.
+  const sid = event.session || state.currentSessionId;
+  return state.runs.get(sid)?.draft || null;
+}
+
 function handleServerEvent(event) {
   state.lastEventId = Math.max(state.lastEventId, Number(event.id || 0));
+  const draft = draftForEvent(event);
   if (event.type === "agent_started") {
-    setActivity("agent", "正在理解任务", "active");
+    setActivity(draft, "agent", "正在理解任务", "active");
   }
   if (event.type === "approval_required") {
-    setActivity(`approval:${event.tool}`, "等待人工批准", "waiting", toolDisplayName(event.tool));
+    setActivity(draft, `approval:${event.tool}`, "等待人工批准", "waiting", toolDisplayName(event.tool));
   }
   if (event.type === "approval_resolved") {
-    setActivity(`approval:${event.tool}`, event.approved ? "审批已通过" : "审批已拒绝", event.approved ? "done" : "failed", toolDisplayName(event.tool));
+    setActivity(draft, `approval:${event.tool}`, event.approved ? "审批已通过" : "审批已拒绝", event.approved ? "done" : "failed", toolDisplayName(event.tool));
   }
   if (event.type === "tool_started") {
-    setActivity(`tool:${event.tool}`, toolDisplayName(event.tool), "active");
+    setActivity(draft, `tool:${event.tool}`, toolDisplayName(event.tool), "active");
   }
   if (event.type === "tool_finished") {
-    setActivity(`tool:${event.tool}`, toolDisplayName(event.tool), event.ok ? "done" : "failed", event.ok ? "完成" : (event.error_type || "失败"));
+    setActivity(draft, `tool:${event.tool}`, toolDisplayName(event.tool), event.ok ? "done" : "failed", event.ok ? "完成" : (event.error_type || "失败"));
   }
   if (event.type === "agent_finished") {
-    setActivity("agent", "正在整理答案", "done");
+    setActivity(draft, "agent", "正在整理答案", "done");
   }
   if (event.type === "agent_failed") {
-    setActivity("agent", "任务失败", "failed");
+    setActivity(draft, "agent", "任务失败", "failed");
   }
   if (event.type === "agent_stopped") {
-    setActivity("agent", "已停止", "failed");
+    setActivity(draft, "agent", "已停止", "failed");
   }
   if ((event.type === "agent_finished" || event.type === "agent_stopped" || event.type === "agent_failed")
       && event.session && event.session === state.currentSessionId
-      && state.busy && !state.abortController) {
+      && state.busy && !state.runs.has(event.session)) {
     // A run in this session finished on the server while we were not the
-    // stream owner (we switched away and back): clear busy and show the answer.
+    // stream owner (e.g. another tab started it): clear busy, show the answer.
     setBusy(false);
     loadCurrentSession(state.currentSessionId).catch(() => {});
   }
   if (event.type === "steer_received") {
-    setActivity("steer", "已收到补充引导，下一轮生效", "done");
+    setActivity(draft, "steer", "已收到补充引导，下一轮生效", "done");
   }
   if (event.type === "open_link") {
     const href = safeLinkUrl(event.url || "");
@@ -2201,17 +2250,22 @@ function handleServerEvent(event) {
       showToast(`新 skill 已加入面板：${event.skill}`);
     }
   }
-  if (event.type === "tool_started" && event.tool === "web_search") {
-    showToast("正在联网搜索公开资料...");
-  }
-  if (event.type === "tool_finished" && event.tool === "web_search") {
-    showToast(event.ok ? "联网搜索完成" : "联网搜索失败", event.ok ? "info" : "error");
-  }
-  if (event.type === "tool_started" && event.tool === "fetch_url") {
-    showToast("正在读取网页...");
-  }
-  if (event.type === "tool_finished" && event.tool === "fetch_url") {
-    showToast(event.ok ? "网页读取完成" : "网页读取失败", event.ok ? "info" : "error");
+  // Toasts about another session's tools would just confuse; activity panels
+  // already carry them inside their own conversation.
+  const eventIsForViewedSession = !event.session || event.session === state.currentSessionId;
+  if (eventIsForViewedSession) {
+    if (event.type === "tool_started" && event.tool === "web_search") {
+      showToast("正在联网搜索公开资料...");
+    }
+    if (event.type === "tool_finished" && event.tool === "web_search") {
+      showToast(event.ok ? "联网搜索完成" : "联网搜索失败", event.ok ? "info" : "error");
+    }
+    if (event.type === "tool_started" && event.tool === "fetch_url") {
+      showToast("正在读取网页...");
+    }
+    if (event.type === "tool_finished" && event.tool === "fetch_url") {
+      showToast(event.ok ? "网页读取完成" : "网页读取失败", event.ok ? "info" : "error");
+    }
   }
 }
 
@@ -2340,9 +2394,20 @@ function renderApprovalCard(approval) {
 }
 
 async function pollApprovals() {
+  // A pending card that belongs to a session we navigated away from must not
+  // keep squatting in this session's composer.
+  if (state.currentApproval && state.currentApproval.session
+      && state.currentApproval.session !== state.currentSessionId) {
+    removeApprovalCard();
+    state.currentApproval = null;
+  }
   if (state.currentApproval) return;
   const result = await api("/api/approvals");
-  const approval = (result.approvals || [])[0];
+  // Only surface approvals belonging to the session on screen; a blocked run
+  // in another session shows its card when the user switches back to it.
+  const approval = (result.approvals || []).find(
+    (item) => !item.session || item.session === state.currentSessionId,
+  );
   if (!approval) return;
   state.currentApproval = approval;
   // "本轮始终允许" auto-resolves same-tool requests without re-asking.

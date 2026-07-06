@@ -149,6 +149,9 @@ class PendingApproval:
     created_at: float
     event: threading.Event
     approved: bool = False
+    # Which session's run is blocked on this approval: the UI must only show
+    # the card inside THAT session, never in whichever session is on screen.
+    session: str = ""
 
 
 def approval_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -291,6 +294,11 @@ class ApplicationState:
         self._session_locks: dict[str, threading.Lock] = {}
         self._runs: dict[str, dict[str, Any]] = {}
         self._runtimes: dict[str, AgentRuntime] = {}
+        # Which session the CURRENT THREAD is executing a run for. Tool events
+        # and approval requests happen deep inside registry.execute with no
+        # session parameter; each HTTP request runs on its own thread, so a
+        # thread-local carries the session id down to them.
+        self._thread_session = threading.local()
         self._event_id = 0
         self._events: list[dict[str, Any]] = []
         self._approvals: dict[str, PendingApproval] = {}
@@ -393,6 +401,12 @@ class ApplicationState:
                 )
 
     def add_event(self, event: dict[str, Any]) -> None:
+        # Tag tool/approval events with the session whose run emitted them, so
+        # the frontend can route them to the right conversation.
+        if "session" not in event:
+            thread_session = getattr(self._thread_session, "sid", "")
+            if thread_session:
+                event = {**event, "session": thread_session}
         with self._state_lock:
             self._event_id += 1
             item = {
@@ -599,6 +613,7 @@ class ApplicationState:
         lock = self._session_lock(target)
         if not lock.acquire(blocking=False):
             raise RuntimeError("该会话已有任务正在执行")
+        self._thread_session.sid = target
         try:
             if target != self.current_session_id:
                 session = self.sessions.set_current(target)
@@ -614,6 +629,7 @@ class ApplicationState:
             self.add_event({"type": "agent_finished", "session": target})
             return {"answer": answer, "session": self.sessions.get(target)}
         finally:
+            self._thread_session.sid = ""
             lock.release()
 
     def chat_stream(
@@ -634,6 +650,9 @@ class ApplicationState:
         run_state: dict[str, Any] = {"interrupt": threading.Event(), "steering": []}
         with self._state_lock:
             self._runs[target] = run_state
+        # The generator body executes on the HTTP handler thread that iterates
+        # it, so the thread-local reaches registry.execute/_request_approval.
+        self._thread_session.sid = target
 
         def pop_steering() -> list[str]:
             with self._state_lock:
@@ -687,6 +706,7 @@ class ApplicationState:
             self.add_event({"type": "agent_failed", "session": target})
             raise
         finally:
+            self._thread_session.sid = ""
             with self._state_lock:
                 self._runs.pop(target, None)
             lock.release()
@@ -704,6 +724,7 @@ class ApplicationState:
             arguments=arguments,
             created_at=time.time(),
             event=threading.Event(),
+            session=str(getattr(self._thread_session, "sid", "") or ""),
         )
         with self._state_lock:
             self._approvals[approval_id] = pending
@@ -721,6 +742,7 @@ class ApplicationState:
                     "tool": item.tool_name,
                     "risk": item.risk.value,
                     "arguments": approval_arguments(item.arguments),
+                    "session": item.session,
                 }
                 for item in self._approvals.values()
             ]

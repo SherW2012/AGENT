@@ -446,6 +446,40 @@ class WebServerTests(unittest.TestCase):
             payload = json.loads(response.read().decode("utf-8"))
         self.assertTrue(payload["validation"]["result"]["valid"])
 
+    def test_approvals_and_events_are_tagged_with_their_session(self):
+        # An approval raised by session A's run must surface as session A's,
+        # so the UI never shows it inside whichever session is on screen.
+        import time as _time
+
+        from bnct_tps_agent.safety import Risk
+
+        results = {}
+
+        def worker():
+            self.state._thread_session.sid = "sess-approval-test"
+            results["approved"] = self.state._request_approval(
+                "run_build", Risk.EXECUTE, {"profile": "debug"}
+            )
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        pending = []
+        for _ in range(200):
+            pending = self.state.pending_approvals()
+            if pending:
+                break
+            _time.sleep(0.01)
+        self.assertTrue(pending, "approval never appeared")
+        self.assertEqual(pending[0]["session"], "sess-approval-test")
+        self.state.resolve_approval(pending[0]["id"], True)
+        thread.join(timeout=5)
+        self.assertTrue(results.get("approved"))
+        tagged = [
+            event for event in self.state.events_since(0)
+            if event["type"] == "approval_required" and event.get("session") == "sess-approval-test"
+        ]
+        self.assertTrue(tagged, "approval_required event was not session-tagged")
+
     def test_approval_preview_is_bounded(self):
         result = approval_arguments({"content": "x" * 5000})
         self.assertLess(len(result["content"]), 4100)
