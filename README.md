@@ -105,23 +105,29 @@ Web 右侧 Skill 面板会显示当前已发现的 skill。点击虚线加号可
 - `create-word`：在工作目录生成 `.docx` Word 文档。
 - `create-ppt`：在工作目录生成 `.pptx` 演示文稿。
 - `create-excel`：在工作目录生成 `.xlsx` Excel 表格。
-- `tps-build-debug` ⚡：一键运行用户配置的 Debug 编译脚本，失败时提取关键错误并预估源码位置。
-- `tps-build-release` ⚡：一键运行 Release 编译脚本，检查成败并提示发布风险。
+- `tps-build-debug` ⚡：一键 Debug 编译 + 产物同步 + 日志总结，失败时提取关键错误并预估源码位置。
+- `tps-build-release` ⚡：一键 Release 编译 + 产物同步，检查成败并提示发布风险。
 - `tps-build-diagnose`：分析已有编译日志，聚类错误、排序根因、给出定位建议（不执行任何命令）。
 
 ### Skill 交互分类
 
-Skill 分四类交互方式，`SKILL.md` frontmatter 用 `interaction` 与 `visibility` 声明：
+Skill 分五类交互方式，`SKILL.md` frontmatter 用 `interaction` 与 `visibility` 声明：
 
 | 类别 | 行为 | 例子 |
 |---|---|---|
-| `direct` ⚡ | 点击即填入完整指令，回车直接执行 | `tps-build-debug/release` |
+| `instant` ⚡ | **点击即执行**：直接发送、免回车；skill 声明的工具本次运行免审批 | `tps-build-debug/release` |
+| `direct` | 点击即填入完整指令，回车直接执行 | — |
 | `guided`（默认） | 点击填入说明模板，需补充目标后发送 | `create-word/ppt/excel`、`tps-build-diagnose` |
 | 附件驱动 | 上传匹配类型的附件自动触发 | `dicom-tags` |
 | `background` | 不显示在面板，需要时自动使用 | `web-search`、`archive-extract`、`pdf-extract` |
 
-导入的第三方 skill 默认按 `guided` 处理；若其 frontmatter 声明了 `interaction: direct`
-或附件处理器字段，则按对应类别工作。
+`instant` 的免审批依据是双重人工授权：能被执行的脚本只有人工登记过的
+（`configure_build_profile`，登记本身需审批），而按钮点击就是这一次运行的授权——
+和双击 `.bat` 是同一个信任模型，多余的回车与审批只是摩擦。skill 在 frontmatter 用
+`auto_approve_tools` 声明免审批的工具（仅对本次运行生效，运行结束即失效），审批
+记录照常写入审计日志。首次使用时的配置（脚本路径、产物目录）仍在对话中完成并需
+审批。导入的第三方 skill 默认按 `guided` 处理；若其 frontmatter 声明了其他
+`interaction` 或附件处理器字段，则按对应类别工作。
 
 **图标**：出厂 skill 在 frontmatter 里用 `icon: "🔍"` 声明默认图标（emoji）；导入的
 skill 也可以在自己的 `SKILL.md` 里声明 `icon` 自定义。未声明时按名称哈希从一组预设
@@ -137,12 +143,22 @@ SKILL.md 并调用 `create_agent_skill`（写入类，需审批）。新 skill �
 执行”三道人工闸门，例如让 Agent 自己生成 `launch_tps.bat` 并注册为 `launch` 档案，
 之后一句“启动 TPS”即可一键运行。
 
-### TPS 编译 Skill 的配置
+### TPS 编译 Skill 的配置与一键执行
 
-编译脚本路径因机器而异，**绝不写死在代码里**。首次让 Agent 编译时，它会调用
-`get_build_profiles` 发现没有配置，向你要脚本的完整路径（例如
-`D:\...\vs2019_win64.bat`），经你批准后保存到用户数据目录
-`~/.bnct_agent/build-profiles.json`。之后每次编译只需一次审批即可执行。
+编译脚本路径因机器而异，**绝不写死在代码里**。首次点击编译按钮时，Agent 调用
+`get_build_profiles` 发现没有配置，向你要两样东西：脚本的完整路径（例如
+`D:\...\vs2019_win64.bat`）和**产物同步映射**（例如 Debug 的
+`build-vs2019-x64\bin` → `bin\win64`、Release 的
+`build-vs2019-x64-release\bin` → `bin\win64_release`，相对路径以脚本所在目录
+为基准），经你批准后保存到用户数据目录 `~/.bnct_agent/build-profiles.json`。
+
+配置完成后，**点击按钮 = 完整执行**：编译 → 成功后自动把产物（dll/exe 等）
+覆盖复制到目标目录 → 汇报用时/警告数/同步结果/日志路径，失败则汇报关键错误与
+根因预估。不需要再敲回车，也没有审批弹窗——脚本是你登记的、点击是你按的，
+这与双击 `.bat` 的信任等级相同（体验对齐，且多了日志诊断和产物同步）。产物
+被运行中的 TPS 占用导致的复制失败会逐个列出。对话里说“这次不要同步产物”即可
+用 `deploy=false` 跳过同步；修改映射也在对话中完成。
+
 `run_build` 只能运行人工登记过的脚本，模型不能构造任意命令；输出按 UTF-8→GBK
 兜底解码避免中文日志乱码，完整日志存到 `~/.bnct_agent/build-logs/`，同时返回
 确定性提取的错误诊断（文件/行/错误码/信息）供模型定位根因。超时默认 30 分钟，

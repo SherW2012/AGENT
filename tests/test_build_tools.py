@@ -16,6 +16,10 @@ from bnct_tps_agent.safety import SafetyPolicy
 from bnct_tps_agent.tool_registry import ToolRegistry
 
 
+def relative_path_nt(relative: str) -> str:
+    return relative.replace("/", "\\")
+
+
 SAMPLE_LOG = """\
 Microsoft (R) Build Engine
   Dose.cpp
@@ -50,6 +54,21 @@ class BuildToolsTests(unittest.TestCase):
             script.write_text("#!/bin/sh\n" + body, encoding="utf-8")
             script.chmod(0o755)
         return script
+
+    def _make_artifact_script(self, files: dict[str, str], exit_code: int) -> Path:
+        """A build script that writes the given relative files then exits.
+        Emits .bat or .sh syntax so the suite passes on Windows and Linux."""
+        lines = []
+        for relative, content in files.items():
+            if os.name == "nt":
+                folder = str(Path(relative).parent).replace("/", "\\")
+                lines.append(f'if not exist "{folder}" mkdir "{folder}"')
+                lines.append(f'echo {content}> "{relative_path_nt(relative)}"')
+            else:
+                lines.append(f'mkdir -p "{Path(relative).parent}"')
+                lines.append(f'echo "{content}" > "{relative}"')
+        lines.append(f"exit {'/b ' if os.name == 'nt' else ''}{exit_code}")
+        return self._make_script("\n".join(lines) + "\n")
 
     def test_msvc_linker_cmake_and_gcc_errors_are_extracted(self):
         errors = extract_build_errors(SAMPLE_LOG)
@@ -107,6 +126,70 @@ class BuildToolsTests(unittest.TestCase):
     def test_run_build_requires_configuration_first(self):
         with self.assertRaises(ValueError):
             run_build(self.root, self.data_dir, "release")
+
+    def test_configure_rejects_bad_deploy_mappings(self):
+        script = self._make_script("exit 0\n")
+        with self.assertRaises(ValueError):
+            configure_build_profile(self.root, self.data_dir, "debug", str(script), deploy=[{"source": "a"}])
+        with self.assertRaises(ValueError):
+            configure_build_profile(
+                self.root, self.data_dir, "debug", str(script), deploy=[{"source": "a", "target": "a"}]
+            )
+
+    def test_successful_build_syncs_artifacts_to_target_dirs(self):
+        # The script produces artifacts under build-out/bin (relative to its own
+        # directory); the profile maps them onto bin/win64, overwriting stale files.
+        script = self._make_artifact_script(
+            {"build-out/bin/dose.dll": "new dose engine", "build-out/bin/plugins/gui.dll": "new gui"},
+            exit_code=0,
+        )
+        target = script.parent / "bin" / "win64"
+        target.mkdir(parents=True)
+        (target / "dose.dll").write_text("stale", encoding="utf-8")
+        configure_build_profile(
+            self.root, self.data_dir, "debug", str(script),
+            deploy=[{"source": "build-out/bin", "target": "bin/win64"}],
+        )
+        result = run_build(self.root, self.data_dir, "debug")
+        self.assertTrue(result["success"])
+        self.assertEqual(result["deployed"]["copiedCount"], 2)
+        self.assertEqual(result["deployed"]["failures"], [])
+        self.assertIn("new dose engine", (target / "dose.dll").read_text(encoding="utf-8"))
+        self.assertTrue((target / "plugins" / "gui.dll").is_file())
+
+    def test_failed_build_does_not_sync_artifacts(self):
+        script = self._make_artifact_script({"build-out/bin/dose.dll": "broken"}, exit_code=1)
+        configure_build_profile(
+            self.root, self.data_dir, "debug", str(script),
+            deploy=[{"source": "build-out/bin", "target": "bin/win64"}],
+        )
+        result = run_build(self.root, self.data_dir, "debug")
+        self.assertFalse(result["success"])
+        self.assertIsNone(result["deployed"])
+        self.assertFalse((script.parent / "bin" / "win64").exists())
+
+    def test_deploy_can_be_skipped_per_run(self):
+        script = self._make_artifact_script({"build-out/bin/dose.dll": "artifact"}, exit_code=0)
+        configure_build_profile(
+            self.root, self.data_dir, "debug", str(script),
+            deploy=[{"source": "build-out/bin", "target": "bin/win64"}],
+        )
+        result = run_build(self.root, self.data_dir, "debug", deploy=False)
+        self.assertTrue(result["success"])
+        self.assertIsNone(result["deployed"])
+        self.assertFalse((script.parent / "bin" / "win64").exists())
+
+    def test_missing_artifact_source_is_reported_not_fatal(self):
+        script = self._make_script("exit 0\n")
+        configure_build_profile(
+            self.root, self.data_dir, "debug", str(script),
+            deploy=[{"source": "no-such-dir/bin", "target": "bin/win64"}],
+        )
+        result = run_build(self.root, self.data_dir, "debug")
+        self.assertTrue(result["success"])
+        self.assertEqual(result["deployed"]["copiedCount"], 0)
+        self.assertEqual(len(result["deployed"]["failures"]), 1)
+        self.assertIn("产物目录不存在", result["deployed"]["failures"][0])
 
     def test_registry_requires_approval_for_run_build(self):
         script = self._make_script("exit 0\n")

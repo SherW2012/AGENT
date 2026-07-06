@@ -312,28 +312,47 @@ class ToolRegistry:
                 "configure_build_profile",
                 "Register or update a named build profile (e.g. debug, release) pointing at a build script "
                 "(.bat/.cmd/.sh/.ps1) whose absolute path the USER provided. Never guess or invent the path -- "
-                "it differs per machine. Stored in the per-user data dir, independent of the workspace.",
+                "it differs per machine. Optional deploy is a list of {source, target} directory pairs the USER "
+                "described (artifact sync: after a successful build the files under each source dir are copied "
+                "over the target dir; relative paths resolve against the script's directory). Stored in the "
+                "per-user data dir, independent of the workspace.",
                 {
                     **object_schema,
                     "properties": {
                         "profile": {"type": "string"},
                         "script_path": {"type": "string"},
+                        "deploy": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {"source": {"type": "string"}, "target": {"type": "string"}},
+                                "required": ["source", "target"],
+                            },
+                        },
                     },
                     "required": ["profile", "script_path"],
                 },
                 Risk.WRITE,
-                lambda root, profile, script_path: configure_build_profile(root, self.data_dir, profile, script_path),
+                lambda root, profile, script_path, deploy=None: configure_build_profile(
+                    root, self.data_dir, profile, script_path, deploy
+                ),
             ),
             Tool(
                 "run_build",
                 "Run a previously configured build profile's script and capture its log. Only human-registered "
                 "scripts can run; arbitrary commands are not accepted. Returns exit code, duration, warning "
                 "count, deterministically extracted error diagnostics (file/line/code/message), the saved log "
-                "path and the log tail. After a failure, explain the first real errors and estimate where in "
-                "the project they originate.",
-                {**object_schema, "properties": {"profile": {"type": "string"}}, "required": ["profile"]},
+                "path and the log tail. If the profile has deploy mappings, a successful build automatically "
+                "copies the artifacts (dll/exe/...) into their target dirs and reports the result in 'deployed' "
+                "(pass deploy=false to skip syncing this run). After a failure, explain the first real errors "
+                "and estimate where in the project they originate.",
+                {
+                    **object_schema,
+                    "properties": {"profile": {"type": "string"}, "deploy": {"type": "boolean"}},
+                    "required": ["profile"],
+                },
                 Risk.EXECUTE,
-                lambda root, profile: run_build(root, self.data_dir, profile),
+                lambda root, profile, deploy=True: run_build(root, self.data_dir, profile, deploy=deploy),
             ),
             Tool(
                 "analyze_build_log",

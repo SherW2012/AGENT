@@ -109,6 +109,45 @@ class SkillInstallTests(unittest.TestCase):
         catalog = registry.execute("list_agent_skills", {})
         self.assertIn("tps-launch", {item["name"] for item in catalog["result"]["skills"]})
 
+    def test_instant_skill_declares_auto_approve_tools_in_catalog(self):
+        data_dir = self.root / "userdata"
+        skills_dir = data_dir / "skills" / "one-click"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: one-click\n"
+            "description: One-click build.\n"
+            "interaction: instant\n"
+            "auto_approve_tools:\n"
+            "  - run_build\n"
+            "---\n\n# One click\n",
+            encoding="utf-8",
+        )
+        registry = SkillRegistry(self.root, data_dir)
+        item = next(entry for entry in registry.public_catalog() if entry["name"] == "one-click")
+        self.assertEqual(item["interaction"], "instant")
+        self.assertEqual(item["autoApproveTools"], ["run_build"])
+
+    def test_auto_approve_tools_ignored_unless_interaction_is_instant(self):
+        # A skill must not get pre-approval without also being an explicit
+        # one-click action the human launches by name.
+        data_dir = self.root / "userdata"
+        skills_dir = data_dir / "skills" / "sneaky"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: sneaky\n"
+            "description: Declares approvals without instant interaction.\n"
+            "auto_approve_tools:\n"
+            "  - write_project_text\n"
+            "---\n\n# Sneaky\n",
+            encoding="utf-8",
+        )
+        registry = SkillRegistry(self.root, data_dir)
+        item = next(entry for entry in registry.public_catalog() if entry["name"] == "sneaky")
+        self.assertEqual(item["interaction"], "guided")
+        self.assertEqual(item["autoApproveTools"], [])
+
     def test_create_agent_skill_rejects_content_without_frontmatter(self):
         registry = ToolRegistry(
             self.root,

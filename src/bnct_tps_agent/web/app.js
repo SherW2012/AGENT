@@ -1273,6 +1273,27 @@ function skillIconElement(skill) {
 function stageSkillPrompt(skill) {
   const displayName = skill.displayName || skill.name || "skill";
   const defaultPrompt = skill.defaultPrompt || `请读取并使用 ${skill.name} skill。`;
+  if (skill.interaction === "instant") {
+    // One-click skill: the click IS the send AND the consent. The skill's
+    // declared tools are pre-approved for this run only (the set is cleared
+    // when the run ends), so a configured action runs like double-clicking
+    // the .bat -- no extra Enter, no approval dialog. First-time setup
+    // (script path, artifact dirs) still happens in conversation.
+    if (state.busy) {
+      showToast("当前有任务进行中，稍后再点。", "error");
+      return;
+    }
+    (skill.autoApproveTools || []).forEach((tool) => state.autoApproveTools.add(tool));
+    sendTask(defaultPrompt);
+    if (state.busy) {
+      showToast(`${displayName} 已启动。`);
+    } else {
+      // The launch was rejected (e.g. missing API key): the pre-approval must
+      // not linger and silently apply to the next unrelated task.
+      state.autoApproveTools.clear();
+    }
+    return;
+  }
   if (skill.interaction === "direct") {
     // Fixed-action skill: the default prompt is complete, nothing to fill in.
     // Stage it ready to send -- one Enter runs it (execution still goes through
@@ -1323,7 +1344,7 @@ function buildSkillRow(skill, index) {
   const copy = document.createElement("span");
   copy.className = "skill-copy";
   const title = document.createElement("strong");
-  title.textContent = (skill.displayName || skill.name) + (skill.interaction === "direct" ? " ⚡" : "");
+  title.textContent = (skill.displayName || skill.name) + (skill.interaction === "instant" ? " ⚡" : "");
   const subtitle = document.createElement("small");
   const subtitleText = skillSubtitle(skill);
   subtitle.textContent = subtitleText;

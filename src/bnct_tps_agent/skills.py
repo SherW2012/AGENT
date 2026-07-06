@@ -62,10 +62,21 @@ class Skill:
 
     @property
     def interaction(self) -> str:
-        """How clicking the skill behaves: "direct" fills a ready-to-send prompt
-        (fixed actions like builds), "guided" asks the user to add a target."""
+        """How clicking the skill behaves: "instant" sends the default prompt
+        immediately (one click = run, see auto_approve_tools), "direct" fills a
+        ready-to-send prompt, "guided" asks the user to add a target."""
         value = str(self.metadata.get("interaction") or "guided").strip().lower()
-        return value if value in {"direct", "guided"} else "guided"
+        return value if value in {"instant", "direct", "guided"} else "guided"
+
+    @property
+    def auto_approve_tools(self) -> list[str]:
+        """Tools this skill's launch pre-approves for that ONE run. Only honored
+        for interaction: instant -- the human's click on a configured, named
+        action is the consent, so approval prompts would be pure friction. The
+        approvals are still recorded in the audit log as auto-approved."""
+        if self.interaction != "instant":
+            return []
+        return [str(item).strip() for item in self.metadata.get("auto_approve_tools", []) if str(item).strip()]
 
 
 def _parse_scalar(value: str) -> Any:
@@ -203,6 +214,7 @@ class SkillRegistry:
                     "removable": self.is_removable(skill),
                     "favorite": skill.name in favorites,
                     "interaction": skill.interaction,
+                    "autoApproveTools": skill.auto_approve_tools,
                     "icon": str(skill.metadata.get("icon") or "").strip()[:24],
                     "trusted": skill.trusted,
                     "visibility": skill.visibility,
