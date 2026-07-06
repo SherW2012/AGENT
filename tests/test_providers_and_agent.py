@@ -268,6 +268,30 @@ class ProviderAndAgentTests(unittest.TestCase):
         # The stored answer stays clean (no leading separator).
         self.assertEqual(events[-1]["answer"], "查完了")
 
+    def test_system_message_carries_current_date_every_run(self):
+        # Without the real date the model's internal clock (training cutoff)
+        # decides "that event has not happened yet" and skips searching.
+        chunks_a = [SimpleNamespace(id="r", choices=[SimpleNamespace(delta=SimpleNamespace(content="好"), finish_reason="stop")])]
+        chunks_b = [SimpleNamespace(id="r", choices=[SimpleNamespace(delta=SimpleNamespace(content="好"), finish_reason="stop")])]
+        completions = FakeStreamingCompletions([chunks_a, chunks_b])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        registry = FakeRegistry()
+        settings = Settings.load(self.root, provider="kimi", api_key="test-key")
+        audit = AuditLogger(self.root / "tests" / "runtime_output" / "date-audit")
+        runtime = AgentRuntime(settings, registry, audit, client=client)
+
+        import time as _time
+        list(runtime.run_events("你好"))
+        system_message = completions.requests[0]["messages"][0]
+        self.assertEqual(system_message["role"], "system")
+        self.assertIn(_time.strftime("%Y-%m-%d"), system_message["content"])
+        self.assertIn("training data has a cutoff", system_message["content"])
+        # A cached runtime must refresh the date on the NEXT run too (sessions
+        # stay cached across midnight): simulate staleness and re-run.
+        runtime.messages[0] = {"role": "system", "content": "STALE"}
+        list(runtime.run_events("再来"))
+        self.assertIn(_time.strftime("%Y-%m-%d"), completions.requests[1]["messages"][0]["content"])
+
     def test_kimi_builtin_web_search_is_offered_and_echoed(self):
         # Round 1: the model invokes its builtin $web_search; we must echo the
         # arguments back verbatim (Moonshot contract). Round 2: the answer.

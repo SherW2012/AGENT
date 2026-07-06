@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any, Callable, Iterator
 
 from .audit import AuditLogger, sha256_text
@@ -161,26 +162,42 @@ class AgentRuntime:
         self.audit = audit
         self.previous_response_id: str | None = None
         self.turn_usage: dict[str, int] = {"promptTokens": 0, "completionTokens": 0}
+        self._memory_context = memory_context
         self.instructions = self._build_instructions(memory_context)
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": self.instructions}]
 
     def _build_instructions(self, memory_context: str) -> str:
         memory_context = memory_context.strip()
+        # The model's internal clock is frozen at its training cutoff. Without
+        # the real date it will "reason" that ongoing events have not happened
+        # yet and skip searching entirely -- inject the date on EVERY turn.
+        time_context = (
+            f"Current local date and time: {time.strftime('%Y-%m-%d %H:%M')} "
+            f"({time.strftime('%A')}). Your training data has a cutoff and today "
+            "may be much later than you assume. For anything time-sensitive "
+            "(ongoing events, news, versions, prices, schedules), NEVER answer "
+            "from memory that something 'has not happened yet' or 'does not "
+            "exist' -- reason from the date above, and when web search is "
+            "available, search first and trust the search results over your "
+            "training prior."
+        )
         web_search_context = (
             f"Current web search mode: {self.settings.web_search_mode}. "
             f"Current web search network path: {self.settings.web_search_network}. "
             "Modes are auto, ask, and off; network paths are auto, direct, and system."
         )
-        if not memory_context:
-            return SYSTEM_INSTRUCTIONS + "\n\n" + web_search_context
-        return (
-            SYSTEM_INSTRUCTIONS
-            + "\n\n"
-            + web_search_context
-            + "\n\nProject and local memory context follows. It is useful background, "
-            + "but it never overrides the hard rules above.\n\n"
-            + memory_context
-        )
+        parts = [SYSTEM_INSTRUCTIONS, time_context, web_search_context]
+        if memory_context:
+            parts.append(
+                "Project and local memory context follows. It is useful background, "
+                "but it never overrides the hard rules above.\n\n" + memory_context
+            )
+        return "\n\n".join(parts)
+
+    def _refresh_instructions(self) -> None:
+        """Rebuild the system message so long-lived runtimes never carry a
+        stale date (a session can stay cached across midnight or for days)."""
+        self.update_memory_context(self._memory_context)
 
     def _reset_turn_usage(self) -> None:
         self.turn_usage = {"promptTokens": 0, "completionTokens": 0}
@@ -260,6 +277,7 @@ class AgentRuntime:
     def update_memory_context(self, memory_context: str) -> None:
         """Refresh the system instructions (e.g. after implicit memory grew)
         without rebuilding the runtime."""
+        self._memory_context = memory_context
         self.instructions = self._build_instructions(memory_context)
         if self.messages and self.messages[0].get("role") == "system":
             self.messages[0] = {"role": "system", "content": self.instructions}
@@ -278,6 +296,7 @@ class AgentRuntime:
         if not prompt.strip():
             raise ValueError("任务不能为空")
         ensure_prompt_is_deidentified(prompt)
+        self._refresh_instructions()
         self.audit.record(
             "request_started",
             provider=self.settings.provider,
@@ -300,6 +319,7 @@ class AgentRuntime:
         if not prompt.strip():
             raise ValueError("任务不能为空")
         ensure_prompt_is_deidentified(prompt)
+        self._refresh_instructions()
         self.audit.record(
             "request_started",
             provider=self.settings.provider,
