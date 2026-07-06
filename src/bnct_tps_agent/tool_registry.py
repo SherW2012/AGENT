@@ -159,7 +159,9 @@ class ToolRegistry:
                     },
                     "required": ["note", "category"],
                 },
-                Risk.WRITE,
+                # The user explicitly asked to remember something -- that IS the
+                # consent. No second approval dialog; the write is still audited.
+                Risk.READ,
                 append_agent_memory,
             ),
             Tool(
@@ -169,7 +171,7 @@ class ToolRegistry:
                 "the distinctive text of the entries to remove (at least 2 characters); matching is a "
                 "deterministic substring check on memory bullet lines.",
                 {**object_schema, "properties": {"match": {"type": "string"}}, "required": ["match"]},
-                Risk.WRITE,
+                Risk.READ,
                 lambda root, match: forget_agent_memory(root, self.data_dir, match),
             ),
             Tool(

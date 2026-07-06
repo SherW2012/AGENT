@@ -142,6 +142,18 @@ def delete_schedule(data_dir: Path, schedule_id: str) -> dict[str, Any]:
     return {"id": clean_id, "message": "定时任务已删除。"}
 
 
+def set_schedule_session(data_dir: Path, schedule_id: str, session_id: str) -> None:
+    """Remember the dedicated session a schedule writes into, so every firing
+    appends to ONE session instead of spawning a new one per run."""
+    with _LOCK:
+        items = _load(data_dir)
+        for item in items:
+            if item.get("id") == schedule_id:
+                item["sessionId"] = session_id
+                break
+        _save(data_dir, items)
+
+
 def pop_due_schedules(data_dir: Path, now: float | None = None) -> list[dict[str, Any]]:
     """Return schedules that are due and advance their nextRun immediately, so a
     slow or failed run can never double-fire."""

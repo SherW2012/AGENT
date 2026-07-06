@@ -1387,3 +1387,7 @@ svg {
 .approval-btn.allow:hover { background: var(--accent-bright); }
 .approval-btn.always:hover { background: var(--accent-soft); border-color: rgba(0, 64, 142, 0.4); color: var(--accent); }
 .approval-btn.deny:hover { background: rgba(185, 85, 85, 0.1); border-color: rgba(185, 85, 85, 0.4); color: var(--red); }
+
+/* Approval dock sits above the composer, matching its width. */
+.approval-dock { width: min(860px, 100%); margin: 0 auto 8px; }
+.approval-dock .approval-inline { max-width: 100%; margin: 0; }

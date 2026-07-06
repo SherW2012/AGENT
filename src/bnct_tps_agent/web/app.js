@@ -43,6 +43,7 @@ const state = {
 const elements = {
   appShell: document.querySelector(".app-shell"),
   apiKey: document.querySelector("#api-key-input"),
+  approvalDock: document.querySelector("#approval-dock"),
   attachButton: document.querySelector("#attach-button"),
   attachmentInput: document.querySelector("#attachment-input"),
   attachmentList: document.querySelector("#attachment-list"),
@@ -1154,7 +1155,7 @@ function setUiBlocked(blocked, label = "处理中…") {
 }
 
 async function selectSession(sessionId) {
-  if (sessionId === state.currentSessionId || state.busy) return;
+  if (sessionId === state.currentSessionId) return;
   // Switching rebuilds the runtime server-side and re-renders the whole
   // conversation (markdown + highlighting) client-side, which can take a
   // moment on long sessions — gray the UI out so it reads as busy, not stuck.
@@ -1208,10 +1209,6 @@ async function deleteSession(sessionId, title) {
 }
 
 async function newSession() {
-  if (state.busy) {
-    showToast("当前任务仍在执行", "error");
-    return;
-  }
   setUiBlocked(true, "正在创建新会话…");
   try {
     const result = await api("/api/sessions", { method: "POST", body: "{}" });
@@ -1877,7 +1874,7 @@ async function sendSteer() {
   try {
     await api("/api/chat/steer", {
       method: "POST",
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, sessionId: state.currentSessionId }),
     });
     showToast("已把补充引导交给正在执行的任务，将在下一轮生效。");
   } catch (error) {
@@ -1895,7 +1892,10 @@ function stopTask() {
       // Ignore: the fetch may have already settled.
     }
   }
-  api("/api/chat/stop", { method: "POST", body: "{}" }).catch(() => {});
+  api("/api/chat/stop", {
+    method: "POST",
+    body: JSON.stringify({ sessionId: state.currentSessionId }),
+  }).catch(() => {});
 }
 
 function restoreLastSubmission() {
@@ -1936,6 +1936,14 @@ function handleServerEvent(event) {
   }
   if (event.type === "agent_stopped") {
     setActivity("agent", "已停止", "failed");
+  }
+  if ((event.type === "agent_finished" || event.type === "agent_stopped" || event.type === "agent_failed")
+      && event.session && event.session === state.currentSessionId
+      && state.busy && !state.abortController) {
+    // A run in this session finished on the server while we were not the
+    // stream owner (we switched away and back): clear busy and show the answer.
+    setBusy(false);
+    loadCurrentSession(state.currentSessionId).catch(() => {});
   }
   if (event.type === "steer_received") {
     setActivity("steer", "已收到补充引导，下一轮生效", "done");
@@ -2039,6 +2047,7 @@ function describeApproval(tool, args = {}) {
 function removeApprovalCard() {
   state.approvalCard?.remove();
   state.approvalCard = null;
+  elements.approvalDock.classList.add("hidden");
 }
 
 function renderApprovalCard(approval) {
@@ -2093,13 +2102,10 @@ function renderApprovalCard(approval) {
   actions.append(allow, always, deny);
   card.append(actions);
 
-  // Live inside the streaming draft when there is one, else at the list end.
-  const host = state.activeDraft?.article.querySelector(".message-body") || elements.messageList;
-  host.append(card);
+  // Docked above the composer, Claude Code style -- not inside the chat flow.
+  elements.approvalDock.replaceChildren(card);
+  elements.approvalDock.classList.remove("hidden");
   state.approvalCard = card;
-  if (state.stickToBottom) {
-    elements.conversation.scrollTo({ top: elements.conversation.scrollHeight });
-  }
 }
 
 async function pollApprovals() {

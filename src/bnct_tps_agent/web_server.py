@@ -25,7 +25,7 @@ from .memory import clear_auto_memory, memory_summary, merge_auto_memory, read_a
 from .project_tools import list_project_files, read_project_text
 from .providers import get_provider, public_provider_configs
 from .safety import Risk, SafetyPolicy
-from .schedules import list_schedules, pop_due_schedules
+from .schedules import list_schedules, pop_due_schedules, set_schedule_session
 from .sessions import SessionStore
 from .skills import SkillRegistry
 from .tool_registry import ToolRegistry
@@ -279,7 +279,11 @@ class ApplicationState:
     def __init__(self, root: Path, token: str):
         self.token = token
         self._state_lock = threading.RLock()
-        self._chat_lock = threading.Lock()
+        # Concurrency model: one task at a time PER SESSION, sessions run in
+        # parallel. Each run gets its own interrupt/steering state.
+        self._session_locks: dict[str, threading.Lock] = {}
+        self._runs: dict[str, dict[str, Any]] = {}
+        self._runtimes: dict[str, AgentRuntime] = {}
         self._event_id = 0
         self._events: list[dict[str, Any]] = []
         self._approvals: dict[str, PendingApproval] = {}
@@ -290,8 +294,6 @@ class ApplicationState:
         self.sessions = SessionStore(self.data_dir)
         self.current_session_id = self.sessions.current_id()
         self.skill_registry = SkillRegistry(self.settings.root, self.data_dir)
-        self._interrupt = threading.Event()
-        self._steering: list[str] = []
         self._credentials: dict[str, str] = {}
         if self.settings.api_key:
             self._credentials[self.settings.provider] = self.settings.api_key
@@ -307,6 +309,50 @@ class ApplicationState:
             if auto:
                 parts.append("## Implicit user memory (auto-summarized, advisory only)\n\n" + auto)
         return "\n\n".join(part for part in parts if part)
+
+    def _session_lock(self, session_id: str) -> threading.Lock:
+        with self._state_lock:
+            return self._session_locks.setdefault(str(session_id), threading.Lock())
+
+    def _busy_sessions(self) -> list[str]:
+        with self._state_lock:
+            return [sid for sid, lock in self._session_locks.items() if lock.locked()]
+
+    def _any_busy(self) -> bool:
+        return bool(self._busy_sessions())
+
+    def _get_runtime(self, session_id: str) -> AgentRuntime | None:
+        """Per-session conversation runtime (own message history), created on
+        demand and cached; enables parallel tasks across sessions."""
+        if self.runtime is None:
+            return None
+        with self._state_lock:
+            cached = self._runtimes.get(session_id)
+            if cached is not None:
+                return cached
+            runtime = AgentRuntime(
+                self.settings,
+                self.registry,
+                self.audit,
+                memory_context=self._memory_context(),
+            )
+            self._runtimes[session_id] = runtime
+            # Bound the cache; never evict a session that is mid-run.
+            if len(self._runtimes) > 8:
+                for sid in list(self._runtimes):
+                    if sid != session_id and not self._session_lock(sid).locked():
+                        self._runtimes.pop(sid, None)
+                        break
+            return runtime
+
+    def _refresh_memory_context(self) -> None:
+        context = self._memory_context()
+        with self._state_lock:
+            runtimes = list(self._runtimes.values())
+        for runtime in runtimes:
+            runtime.update_memory_context(context)
+        if self.runtime is not None:
+            self.runtime.update_memory_context(context)
 
     def _rebuild_runtime(self, *, clear_events: bool) -> None:
         with self._state_lock:
@@ -328,6 +374,7 @@ class ApplicationState:
                 search_provider=self.settings.search_provider,
                 search_api_key=self.settings.search_api_key,
             )
+            self._runtimes.clear()
             self.runtime = None
             if self.settings.api_key:
                 self.runtime = AgentRuntime(
@@ -371,57 +418,60 @@ class ApplicationState:
             "searchProvider": self.settings.search_provider,
             "searchApiKeyConfigured": bool(self.settings.search_api_key),
             "usageTotals": self.usage_totals(),
-            "busy": self._chat_lock.locked(),
+            "busy": self._session_lock(self.current_session_id).locked(),
+            "busySessions": self._busy_sessions(),
             "currentSessionId": self.current_session_id,
             "memory": memory_summary(self.settings.root),
             "skills": self.skill_registry.public_catalog(),
         }
 
     def import_skill(self, source: str) -> dict[str, Any]:
-        if self._chat_lock.locked():
-            raise RuntimeError("当前任务仍在执行，请稍后再导入 skill")
+        if self._any_busy():
+            raise RuntimeError("有任务正在执行，请稍后再导入 skill")
         skill = self.skill_registry.import_skill(source)
         self._rebuild_runtime(clear_events=False)
         self.add_event({"type": "skill_imported", "skill": skill["name"]})
         return {"skill": skill, "config": self.config()}
 
     def delete_skill(self, name: str) -> dict[str, Any]:
-        if self._chat_lock.locked():
-            raise RuntimeError("当前任务仍在执行，请稍后再删除 skill")
+        if self._any_busy():
+            raise RuntimeError("有任务正在执行，请稍后再删除 skill")
         removed = self.skill_registry.delete_skill(name)
         self._rebuild_runtime(clear_events=False)
         self.add_event({"type": "skill_deleted", "skill": removed["name"]})
         return {"skill": removed, "config": self.config()}
 
-    def stop(self) -> dict[str, Any]:
-        # Cooperative interrupt: the streaming agent loop checks this flag between
-        # model chunks and tool rounds and stops as soon as possible.
-        self._interrupt.set()
-        self.add_event({"type": "agent_stop_requested"})
+    def stop(self, session_id: str | None = None) -> dict[str, Any]:
+        # Cooperative interrupt for ONE session's run; other sessions keep going.
+        target = str(session_id or self.current_session_id)
+        with self._state_lock:
+            run_state = self._runs.get(target)
+        if run_state is None:
+            return {"ok": False, "message": "该会话没有正在执行的任务"}
+        run_state["interrupt"].set()
+        self.add_event({"type": "agent_stop_requested", "session": target})
         return {"ok": True}
 
-    def steer(self, text: str) -> dict[str, Any]:
-        """Queue mid-task user guidance; the agent loop injects it before the
-        next reasoning round instead of rejecting it as '已有任务正在执行'."""
+    def steer(self, text: str, session_id: str | None = None) -> dict[str, Any]:
+        """Queue mid-task user guidance for one session's run; injected before
+        its next reasoning round."""
         clean = str(text or "").strip()
         if not clean:
             raise ValueError("补充内容不能为空")
-        if not self._chat_lock.locked():
+        target = str(session_id or self.current_session_id)
+        with self._state_lock:
+            run_state = self._runs.get(target)
+        if run_state is None:
             raise RuntimeError("当前没有正在执行的任务，请直接发送新消息")
         with self._state_lock:
-            self._steering.append(clean)
-        self.sessions.add_message(self.current_session_id, "user", clean)
-        self.add_event({"type": "steer_received"})
+            run_state["steering"].append(clean)
+        self.sessions.add_message(target, "user", clean)
+        self.add_event({"type": "steer_received", "session": target})
         return {"ok": True}
 
-    def _pop_steering(self) -> list[str]:
-        with self._state_lock:
-            items, self._steering = self._steering, []
-        return items
-
     def configure(self, payload: dict[str, Any]) -> dict[str, Any]:
-        if self._chat_lock.locked():
-            raise RuntimeError("当前任务仍在执行，请稍后再修改设置")
+        if self._any_busy():
+            raise RuntimeError("有任务正在执行，请稍后再修改设置")
         root_value = payload.get("root") or str(self.settings.root)
         root = Path(str(root_value)).expanduser().resolve()
         if not root.is_dir():
@@ -464,22 +514,9 @@ class ApplicationState:
         self.add_event({"type": "session_configured", "provider": provider, "model": model})
         return self.config()
 
-    def _reset_conversation_state(self) -> None:
-        """Fast path for session create/select/delete: clear the event feed and
-        the model conversation, but keep the runtime/registry/skills as-is."""
-        with self._state_lock:
-            self._events.clear()
-            self._event_id = 0
-        if self.runtime is not None:
-            self.runtime.update_memory_context(self._memory_context())
-            self.runtime.reset_conversation()
-
     def new_session(self) -> dict[str, Any]:
-        if self._chat_lock.locked():
-            raise RuntimeError("当前任务仍在执行")
         session = self.sessions.create("新会话")
         self.current_session_id = str(session["id"])
-        self._reset_conversation_state()
         self.add_event({"type": "session_started"})
         return self.config()
 
@@ -494,11 +531,8 @@ class ApplicationState:
         return {"currentSessionId": self.current_session_id, "session": session}
 
     def select_session(self, session_id: str) -> dict[str, Any]:
-        if self._chat_lock.locked():
-            raise RuntimeError("当前任务仍在执行")
         session = self.sessions.set_current(session_id)
         self.current_session_id = str(session["id"])
-        self._reset_conversation_state()
         self.add_event({"type": "session_selected", "session": self.current_session_id})
         return {"config": self.config(), "session": session}
 
@@ -507,24 +541,29 @@ class ApplicationState:
         return {"session": session, **self.list_sessions()}
 
     def delete_session(self, session_id: str) -> dict[str, Any]:
-        if self._chat_lock.locked():
-            raise RuntimeError("当前任务仍在执行")
+        if self._session_lock(session_id).locked():
+            raise RuntimeError("该会话有任务正在执行，无法删除")
         self.current_session_id = self.sessions.delete(session_id)
-        self._reset_conversation_state()
+        with self._state_lock:
+            self._runtimes.pop(session_id, None)
+            self._session_locks.pop(session_id, None)
         self.add_event({"type": "session_deleted", "session": session_id})
         return {"config": self.config(), **self.list_sessions()}
 
     def delete_sessions(self, session_ids: list[str]) -> dict[str, Any]:
-        if self._chat_lock.locked():
-            raise RuntimeError("当前任务仍在执行")
         ids = [str(item) for item in (session_ids or []) if str(item)]
         if not ids:
             raise ValueError("没有选择要删除的会话")
+        busy = [sid for sid in ids if self._session_lock(sid).locked()]
+        if busy:
+            raise RuntimeError("选中的会话中有任务正在执行，无法删除")
         current = self.current_session_id
         for session_id in ids:
             current = self.sessions.delete(session_id)
+            with self._state_lock:
+                self._runtimes.pop(session_id, None)
+                self._session_locks.pop(session_id, None)
         self.current_session_id = current
-        self._reset_conversation_state()
         self.add_event({"type": "sessions_deleted", "count": len(ids)})
         return {"config": self.config(), **self.list_sessions()}
 
@@ -536,27 +575,29 @@ class ApplicationState:
     def chat(self, task: str, attachments: list[dict[str, Any]] | None = None, session_id: str | None = None) -> dict[str, Any]:
         if not task.strip():
             raise ValueError("任务不能为空")
-        if self.runtime is None:
+        target = str(session_id or self.current_session_id)
+        runtime = self._get_runtime(target)
+        if runtime is None:
             raise RuntimeError("尚未配置 API Key，请先打开设置")
-        if not self._chat_lock.acquire(blocking=False):
-            raise RuntimeError("已有任务正在执行")
+        lock = self._session_lock(target)
+        if not lock.acquire(blocking=False):
+            raise RuntimeError("该会话已有任务正在执行")
         try:
-            if session_id and session_id != self.current_session_id:
-                session = self.sessions.set_current(session_id)
+            if target != self.current_session_id:
+                session = self.sessions.set_current(target)
                 self.current_session_id = str(session["id"])
-                self._reset_conversation_state()
             prompt_attachments, stored_attachments = normalize_attachments(attachments, self.skill_registry)
-            history = self.sessions.recent_context(self.current_session_id)
+            history = self.sessions.recent_context(target)
             effective_task = build_task_prompt(task, history, prompt_attachments)
             images = [item["imageData"] for item in prompt_attachments if item.get("imageData")]
-            self.sessions.add_message(self.current_session_id, "user", task, stored_attachments)
-            self.add_event({"type": "agent_started"})
-            answer = self.runtime.run(effective_task, images=images)
-            self.sessions.add_message(self.current_session_id, "assistant", answer)
-            self.add_event({"type": "agent_finished"})
-            return {"answer": answer, "session": self.sessions.get(self.current_session_id)}
+            self.sessions.add_message(target, "user", task, stored_attachments)
+            self.add_event({"type": "agent_started", "session": target})
+            answer = runtime.run(effective_task, images=images)
+            self.sessions.add_message(target, "assistant", answer)
+            self.add_event({"type": "agent_finished", "session": target})
+            return {"answer": answer, "session": self.sessions.get(target)}
         finally:
-            self._chat_lock.release()
+            lock.release()
 
     def chat_stream(
         self,
@@ -566,30 +607,39 @@ class ApplicationState:
     ) -> Iterator[dict[str, Any]]:
         if not task.strip():
             raise ValueError("任务不能为空")
-        if self.runtime is None:
+        target = str(session_id or self.current_session_id)
+        runtime = self._get_runtime(target)
+        if runtime is None:
             raise RuntimeError("尚未配置 API Key，请先打开设置")
-        if not self._chat_lock.acquire(blocking=False):
-            raise RuntimeError("已有任务正在执行")
+        lock = self._session_lock(target)
+        if not lock.acquire(blocking=False):
+            raise RuntimeError("该会话已有任务正在执行；可以切换到其他会话并行提问")
+        run_state: dict[str, Any] = {"interrupt": threading.Event(), "steering": []}
+        with self._state_lock:
+            self._runs[target] = run_state
+
+        def pop_steering() -> list[str]:
+            with self._state_lock:
+                items = list(run_state["steering"])
+                run_state["steering"].clear()
+            return items
+
         try:
-            if session_id and session_id != self.current_session_id:
-                session = self.sessions.set_current(session_id)
+            if target != self.current_session_id:
+                session = self.sessions.set_current(target)
                 self.current_session_id = str(session["id"])
-                self._reset_conversation_state()
             prompt_attachments, stored_attachments = normalize_attachments(attachments, self.skill_registry)
-            history = self.sessions.recent_context(self.current_session_id)
+            history = self.sessions.recent_context(target)
             effective_task = build_task_prompt(task, history, prompt_attachments)
             images = [item["imageData"] for item in prompt_attachments if item.get("imageData")]
-            self.sessions.add_message(self.current_session_id, "user", task, stored_attachments)
-            self._interrupt.clear()
-            with self._state_lock:
-                self._steering.clear()
-            self.add_event({"type": "agent_started"})
+            self.sessions.add_message(target, "user", task, stored_attachments)
+            self.add_event({"type": "agent_started", "session": target})
             answer = ""
             emitted_done = False
-            for event in self.runtime.run_events(
+            for event in runtime.run_events(
                 effective_task,
-                should_continue=lambda: not self._interrupt.is_set(),
-                pop_steering=self._pop_steering,
+                should_continue=lambda: not run_state["interrupt"].is_set(),
+                pop_steering=pop_steering,
                 images=images,
             ):
                 event_type = str(event.get("type") or "")
@@ -599,28 +649,30 @@ class ApplicationState:
                 elif event_type == "done":
                     emitted_done = True
                     answer = str(event.get("answer") or answer)
-                    stopped = self._interrupt.is_set()
+                    stopped = run_state["interrupt"].is_set()
                     if stopped and not answer:
                         answer = "（已停止）"
-                    self.sessions.add_message(self.current_session_id, "assistant", answer)
-                    self.add_event({"type": "agent_stopped" if stopped else "agent_finished"})
+                    self.sessions.add_message(target, "assistant", answer)
+                    self.add_event({"type": "agent_stopped" if stopped else "agent_finished", "session": target})
                     self._accumulate_usage(event.get("usage") if isinstance(event.get("usage"), dict) else None)
                     if not stopped:
                         self._spawn_auto_memorize(task, answer)
-                        self._spawn_context_compression(self.current_session_id)
-                    yield {**event, "answer": answer, "stopped": stopped, "session": self.sessions.get(self.current_session_id)}
+                        self._spawn_context_compression(target)
+                    yield {**event, "answer": answer, "stopped": stopped, "session": self.sessions.get(target)}
                 else:
                     yield event
             if not emitted_done:
-                stopped = self._interrupt.is_set()
-                self.sessions.add_message(self.current_session_id, "assistant", answer or "（已停止）")
-                self.add_event({"type": "agent_stopped" if stopped else "agent_finished"})
-                yield {"type": "done", "answer": answer, "stopped": stopped, "session": self.sessions.get(self.current_session_id)}
+                stopped = run_state["interrupt"].is_set()
+                self.sessions.add_message(target, "assistant", answer or "（已停止）")
+                self.add_event({"type": "agent_stopped" if stopped else "agent_finished", "session": target})
+                yield {"type": "done", "answer": answer, "stopped": stopped, "session": self.sessions.get(target)}
         except Exception:
-            self.add_event({"type": "agent_failed"})
+            self.add_event({"type": "agent_failed", "session": target})
             raise
         finally:
-            self._chat_lock.release()
+            with self._state_lock:
+                self._runs.pop(target, None)
+            lock.release()
 
     def events_since(self, event_id: int) -> list[dict[str, Any]]:
         with self._state_lock:
@@ -790,22 +842,22 @@ class ApplicationState:
             if added:
                 self.audit.record("auto_memory_updated", added=added)
                 self.add_event({"type": "auto_memory_updated", "added": added})
-                if self.runtime is not None:
-                    self.runtime.update_memory_context(self._memory_context())
+                self._refresh_memory_context()
         except Exception:
             # Implicit memory is best-effort background work; never surface errors.
             pass
 
     def clear_auto_memory(self) -> dict[str, Any]:
         clear_auto_memory(self.data_dir)
-        if self.runtime is not None:
-            self.runtime.update_memory_context(self._memory_context())
+        self._refresh_memory_context()
         self.add_event({"type": "auto_memory_cleared"})
         return {"ok": True}
 
     def run_due_schedules(self) -> None:
-        """Called by the scheduler loop; executes due tasks in their own
-        sessions without disturbing the user's current conversation."""
+        """Called by the scheduler loop. Each schedule owns ONE dedicated
+        session (stored in schedules.json) and every firing appends to it, so a
+        5-minute reminder never floods the session list. Runs use the same
+        per-session lock, so they execute in parallel with user tasks."""
         due = pop_due_schedules(self.data_dir)
         for item in due:
             prompt = str(item.get("prompt") or "")
@@ -814,28 +866,36 @@ class ApplicationState:
             if self.runtime is None:
                 self.add_event({"type": "schedule_skipped", "reason": "未配置 API Key", "prompt": prompt[:60]})
                 continue
-            if not self._chat_lock.acquire(blocking=False):
-                self.add_event({"type": "schedule_skipped", "reason": "有任务正在执行", "prompt": prompt[:60]})
-                continue
-            try:
+            session_id = str(item.get("sessionId") or "")
+            session_exists = False
+            if session_id:
+                try:
+                    self.sessions.get(session_id)
+                    session_exists = True
+                except (FileNotFoundError, ValueError):
+                    session_exists = False
+            if not session_exists:
                 session = self.sessions.create(f"⏰ {prompt[:28]}", make_current=False)
                 session_id = str(session["id"])
+                set_schedule_session(self.data_dir, str(item.get("id")), session_id)
+            lock = self._session_lock(session_id)
+            if not lock.acquire(blocking=False):
+                self.add_event({"type": "schedule_skipped", "reason": "该定时任务的上一次执行尚未结束", "prompt": prompt[:60]})
+                continue
+            try:
+                runtime = self._get_runtime(session_id)
+                history = self.sessions.recent_context(session_id)
+                effective = build_task_prompt(prompt, history, [])
                 self.sessions.add_message(session_id, "user", prompt)
-                self.add_event({"type": "schedule_started", "prompt": prompt[:60]})
-                runner = AgentRuntime(
-                    self.settings,
-                    self.registry,
-                    self.audit,
-                    memory_context=self._memory_context(),
-                )
+                self.add_event({"type": "schedule_started", "prompt": prompt[:60], "session": session_id})
                 try:
-                    answer = runner.run(prompt)
+                    answer = runtime.run(effective)
                 except Exception as exc:
                     answer = f"定时任务执行失败：{exc}"
                 self.sessions.add_message(session_id, "assistant", answer)
                 self.add_event({"type": "schedule_finished", "prompt": prompt[:60], "session": session_id})
             finally:
-                self._chat_lock.release()
+                lock.release()
 
     def offline_demo(self) -> dict[str, Any]:
         path = "sample_data/deidentified_case.json"
@@ -1011,9 +1071,14 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/delete-skill":
                 self._send_json(self.server.state.delete_skill(str(payload.get("name") or "")))
             elif parsed.path == "/api/chat/stop":
-                self._send_json(self.server.state.stop())
+                self._send_json(self.server.state.stop(str(payload.get("sessionId") or "") or None))
             elif parsed.path == "/api/chat/steer":
-                self._send_json(self.server.state.steer(str(payload.get("text") or "")))
+                self._send_json(
+                    self.server.state.steer(
+                        str(payload.get("text") or ""),
+                        str(payload.get("sessionId") or "") or None,
+                    )
+                )
             elif parsed.path == "/api/memory/clear-auto":
                 self._send_json(self.server.state.clear_auto_memory())
             elif parsed.path == "/api/chat":
