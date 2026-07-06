@@ -1388,6 +1388,18 @@ svg {
 .approval-btn.always:hover { background: var(--accent-soft); border-color: rgba(0, 64, 142, 0.4); color: var(--accent); }
 .approval-btn.deny:hover { background: rgba(185, 85, 85, 0.1); border-color: rgba(185, 85, 85, 0.4); color: var(--red); }
 
-/* Approval dock sits above the composer, matching its width. */
-.approval-dock { width: min(860px, 100%); margin: 0 auto 8px; }
-.approval-dock .approval-inline { max-width: 100%; margin: 0; }
+/* The approval prompt replaces the composer in place: same width, same box
+   styling, so the input box visually "becomes" the approval dialog. */
+.approval-dock { width: min(860px, 100%); margin: 0 auto; }
+.approval-dock .approval-inline {
+  max-width: 100%;
+  margin: 0;
+  padding: 16px 18px 14px;
+  border: 1px solid rgba(0, 64, 142, 0.5);
+  border-left-width: 1px;
+  border-radius: 17px;
+  box-shadow: 0 14px 38px rgba(20, 40, 72, 0.12);
+}
+.approval-dock .approval-inline-head strong { font-size: 14.5px; }
+.approval-dock .approval-inline-actions { margin-top: 13px; }
+.approval-dock .approval-btn { padding: 8px 18px; font-size: 13px; }

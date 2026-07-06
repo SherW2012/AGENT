@@ -44,6 +44,7 @@ const elements = {
   appShell: document.querySelector(".app-shell"),
   apiKey: document.querySelector("#api-key-input"),
   approvalDock: document.querySelector("#approval-dock"),
+  composer: document.querySelector("#composer"),
   attachButton: document.querySelector("#attach-button"),
   attachmentInput: document.querySelector("#attachment-input"),
   attachmentList: document.querySelector("#attachment-list"),
@@ -2048,6 +2049,9 @@ function removeApprovalCard() {
   state.approvalCard?.remove();
   state.approvalCard = null;
   elements.approvalDock.classList.add("hidden");
+  // Restore the composer: the SAME box that became the approval prompt.
+  elements.composer.classList.remove("hidden");
+  elements.attachmentList.classList.toggle("hidden", state.pendingAttachments.length === 0);
 }
 
 function renderApprovalCard(approval) {
@@ -2102,7 +2106,10 @@ function renderApprovalCard(approval) {
   actions.append(allow, always, deny);
   card.append(actions);
 
-  // Docked above the composer, Claude Code style -- not inside the chat flow.
+  // Claude Code behaviour: the input box itself BECOMES the approval prompt.
+  // Hide the composer and show the card in its place, styled like the composer.
+  elements.composer.classList.add("hidden");
+  elements.attachmentList.classList.add("hidden");
   elements.approvalDock.replaceChildren(card);
   elements.approvalDock.classList.remove("hidden");
   state.approvalCard = card;
