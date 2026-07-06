@@ -25,7 +25,6 @@ from .memory import clear_auto_memory, memory_summary, merge_auto_memory, read_a
 from .project_tools import list_project_files, read_project_text
 from .providers import get_provider, public_provider_configs
 from .safety import Risk, SafetyPolicy
-from .schedules import list_schedules, pop_due_schedules, set_schedule_session
 from .sessions import SessionStore
 from .skills import SkillRegistry
 from .tool_registry import ToolRegistry
@@ -828,7 +827,7 @@ class ApplicationState:
                 "你在为一个工程助手维护长期用户画像。从下面一轮对话中提取最多 2 条值得长期记住的、"
                 "稳定的用户偏好或背景事实（例如工作流程、表达习惯、常用工具、领域背景）。"
                 "只输出要点本身，每行一条，以 \"- \" 开头，单条不超过 60 字。"
-                "以下内容一律不算长期记忆，直接忽略：定时任务/提醒的内容、一次性请求、"
+                "以下内容一律不算长期记忆，直接忽略：提醒/待办的内容、一次性请求、"
                 "当次操作的过程描述、健康提醒等生活琐事。只保留跨会话仍然成立的工作偏好与背景；"
                 "没有值得记住的内容就只输出 NONE。严禁输出患者信息、密钥、密码、内部主机名。\n\n"
                 f"用户: {task[:2000]}\n助手: {answer[:2000]}"
@@ -852,50 +851,6 @@ class ApplicationState:
         self._refresh_memory_context()
         self.add_event({"type": "auto_memory_cleared"})
         return {"ok": True}
-
-    def run_due_schedules(self) -> None:
-        """Called by the scheduler loop. Each schedule owns ONE dedicated
-        session (stored in schedules.json) and every firing appends to it, so a
-        5-minute reminder never floods the session list. Runs use the same
-        per-session lock, so they execute in parallel with user tasks."""
-        due = pop_due_schedules(self.data_dir)
-        for item in due:
-            prompt = str(item.get("prompt") or "")
-            if not prompt:
-                continue
-            if self.runtime is None:
-                self.add_event({"type": "schedule_skipped", "reason": "未配置 API Key", "prompt": prompt[:60]})
-                continue
-            session_id = str(item.get("sessionId") or "")
-            session_exists = False
-            if session_id:
-                try:
-                    self.sessions.get(session_id)
-                    session_exists = True
-                except (FileNotFoundError, ValueError):
-                    session_exists = False
-            if not session_exists:
-                session = self.sessions.create(f"⏰ {prompt[:28]}", make_current=False)
-                session_id = str(session["id"])
-                set_schedule_session(self.data_dir, str(item.get("id")), session_id)
-            lock = self._session_lock(session_id)
-            if not lock.acquire(blocking=False):
-                self.add_event({"type": "schedule_skipped", "reason": "该定时任务的上一次执行尚未结束", "prompt": prompt[:60]})
-                continue
-            try:
-                runtime = self._get_runtime(session_id)
-                history = self.sessions.recent_context(session_id)
-                effective = build_task_prompt(prompt, history, [])
-                self.sessions.add_message(session_id, "user", prompt)
-                self.add_event({"type": "schedule_started", "prompt": prompt[:60], "session": session_id})
-                try:
-                    answer = runtime.run(effective)
-                except Exception as exc:
-                    answer = f"定时任务执行失败：{exc}"
-                self.sessions.add_message(session_id, "assistant", answer)
-                self.add_event({"type": "schedule_finished", "prompt": prompt[:60], "session": session_id})
-            finally:
-                lock.release()
 
     def offline_demo(self) -> dict[str, Any]:
         path = "sample_data/deidentified_case.json"
@@ -1028,8 +983,6 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/sessions":
                 query_text = str(query.get("query", [""])[0])
                 self._send_json(self.server.state.list_sessions(query_text))
-            elif parsed.path == "/api/schedules":
-                self._send_json(list_schedules(self.server.state.data_dir))
             elif parsed.path == "/api/audit":
                 limit = min(max(int(query.get("limit", [200])[0]), 1), 1000)
                 self._send_json(self.server.state.read_audit_entries(limit))
@@ -1179,15 +1132,6 @@ def main() -> None:
             raise SystemExit(f"端口 {args.port} 已被其它程序占用") from exc
         port = int(server.server_address[1])
 
-        def _scheduler_loop() -> None:
-            while True:
-                time.sleep(20)
-                try:
-                    state.run_due_schedules()
-                except Exception:
-                    pass  # The scheduler must survive individual task failures.
-
-        threading.Thread(target=_scheduler_loop, daemon=True).start()
         url = f"http://{args.host}:{port}/#token={token}"
         print(f"BNCT TPS Agent: {url}")
         if args.open_browser:

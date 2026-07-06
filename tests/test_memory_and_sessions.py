@@ -1,56 +1,25 @@
 import shutil
-import time
 import unittest
 import uuid
 from pathlib import Path
 
 from bnct_tps_agent.memory import append_agent_memory, forget_agent_memory, merge_auto_memory, read_auto_memory, sanitize_auto_memory_lines
-from bnct_tps_agent.schedules import create_schedule, delete_schedule, list_schedules, pop_due_schedules
 from bnct_tps_agent.sessions import SessionStore
 
 
-class SchedulesAndMemoryTests(unittest.TestCase):
+class MemoryAndSessionTests(unittest.TestCase):
     def setUp(self):
         base = Path(__file__).resolve().parents[1] / "tests" / "runtime_output"
-        self.data_dir = base / f"sched-{uuid.uuid4().hex}"
+        self.data_dir = base / f"mem-{uuid.uuid4().hex}"
         self.data_dir.mkdir(parents=True)
 
     def tearDown(self):
         shutil.rmtree(self.data_dir, ignore_errors=True)
 
-    def test_interval_schedule_lifecycle(self):
-        created = create_schedule(self.data_dir, "跑一遍 Debug 编译", "interval", interval_minutes=30)
-        self.assertEqual(created["scheduleType"], "interval")
-        listing = list_schedules(self.data_dir)
-        self.assertEqual(listing["count"], 1)
-        delete_schedule(self.data_dir, created["id"])
-        self.assertEqual(list_schedules(self.data_dir)["count"], 0)
-
-    def test_schedule_validation(self):
-        with self.assertRaises(ValueError):
-            create_schedule(self.data_dir, "x", "interval", interval_minutes=1)
-        with self.assertRaises(ValueError):
-            create_schedule(self.data_dir, "x", "daily", daily_time="25:99")
-        with self.assertRaises(ValueError):
-            create_schedule(self.data_dir, "", "daily", daily_time="09:00")
-
-    def test_due_schedules_pop_once_and_advance(self):
-        create_schedule(self.data_dir, "定时检查", "interval", interval_minutes=30)
-        future = time.time() + 31 * 60
-        due = pop_due_schedules(self.data_dir, now=future)
-        self.assertEqual(len(due), 1)
-        # Popping again at the same moment must not double-fire.
-        self.assertEqual(pop_due_schedules(self.data_dir, now=future), [])
-
-    def test_daily_next_run_is_in_the_future(self):
-        created = create_schedule(self.data_dir, "每日汇总", "daily", daily_time="09:00")
-        self.assertTrue(created["nextRun"])
-        self.assertEqual(created["dailyTime"], "09:00")
-
     def test_session_create_without_switching_current(self):
         store = SessionStore(self.data_dir)
         current = store.create("用户会话")["id"]
-        background = store.create("⏰ 定时任务", make_current=False)["id"]
+        background = store.create("后台会话", make_current=False)["id"]
         self.assertEqual(store.current_id(), current)
         self.assertNotEqual(background, current)
 

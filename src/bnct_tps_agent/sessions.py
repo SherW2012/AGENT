@@ -135,7 +135,7 @@ class SessionStore:
             "messages": [],
         }
         self._write(session)
-        # Scheduled runs write into their own session without hijacking the
+        # Background runs write into their own session without hijacking the
         # session the user is currently looking at.
         if make_current:
             self.set_current(str(session["id"]))

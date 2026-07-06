@@ -43,7 +43,6 @@ const state = {
 const elements = {
   appShell: document.querySelector(".app-shell"),
   apiKey: document.querySelector("#api-key-input"),
-  approvalDock: document.querySelector("#approval-dock"),
   composer: document.querySelector("#composer"),
   attachButton: document.querySelector("#attach-button"),
   attachmentInput: document.querySelector("#attachment-input"),
@@ -205,28 +204,6 @@ async function streamApi(path, payload, onEvent, signal) {
     }
     onEvent(event);
   }
-}
-
-function ensureNotificationPermission() {
-  // Win11 shows browser Notifications as native toasts in the notification
-  // center; 127.0.0.1 counts as a secure context so this works out of the box.
-  if (!("Notification" in window)) return;
-  if (Notification.permission === "default") {
-    Notification.requestPermission().catch(() => {});
-  }
-}
-
-function notifySystem(title, body) {
-  try {
-    if ("Notification" in window && Notification.permission === "granted") {
-      const notice = new Notification(title, { body });
-      notice.onclick = () => window.focus();
-      return true;
-    }
-  } catch (_error) {
-    // Fall through to the in-page toast.
-  }
-  return false;
 }
 
 function showToast(message, kind = "info") {
@@ -830,9 +807,6 @@ function toolDisplayName(name) {
     web_search: "联网搜索",
     install_agent_skill: "安装 Skill",
     create_agent_skill: "创建 Skill",
-    create_scheduled_task: "创建定时任务",
-    list_scheduled_tasks: "查看定时任务",
-    delete_scheduled_task: "删除定时任务",
     list_agent_skills: "读取 Skill 列表",
     read_agent_skill: "读取 Skill",
     list_project_files: "浏览工作区",
@@ -1782,7 +1756,6 @@ async function sendTask(prefilled = null) {
   // Remember the submission so a Stop can restore it for editing and resending.
   state.lastSubmission = { typed: typedTask, prefilled, attachments };
   state.stickToBottom = true;
-  ensureNotificationPermission();
   appendMessage("user", task, { attachments: attachmentMetadata, withActions: true });
   appendAssistantDraft();
   if (state.activeDraft) state.activeDraft.task = task;
@@ -1949,17 +1922,6 @@ function handleServerEvent(event) {
   if (event.type === "steer_received") {
     setActivity("steer", "已收到补充引导，下一轮生效", "done");
   }
-  if (event.type === "schedule_finished") {
-    if (!notifySystem("BNCT Agent · 定时任务完成", `${event.prompt || "任务"} 已执行，结果保存在新会话中。`)) {
-      showToast("定时任务已执行完成，结果保存在新会话中。");
-    }
-    loadSessions().catch(() => {});
-  }
-  if (event.type === "schedule_skipped") {
-    if (!notifySystem("BNCT Agent · 定时任务已跳过", event.reason || "")) {
-      showToast(`定时任务已跳过：${event.reason || ""}`, "error");
-    }
-  }
   if (event.type === "skill_imported" || event.type === "skill_deleted") {
     // A skill was created/installed/removed mid-session (possibly by the agent
     // itself): refresh the catalog so the panel updates without a restart.
@@ -2023,12 +1985,6 @@ function describeApproval(tool, args = {}) {
       return { title: "创建一个新 Skill", rows: [["定义", contentPreview(args.skill_md)]] };
     case "install_agent_skill":
       return { title: "从 GitHub 安装 Skill", rows: [["地址", text(args.url, 120)]] };
-    case "create_scheduled_task": {
-      const period = args.schedule_type === "daily" ? `每天 ${text(args.daily_time)}` : `每 ${args.interval_minutes} 分钟`;
-      return { title: `创建定时任务（${period}）`, rows: [["任务", text(args.prompt, 120)]] };
-    }
-    case "delete_scheduled_task":
-      return { title: "删除一个定时任务", rows: [["ID", text(args.id)]] };
     case "create_word_document":
       return { title: `生成 Word 文档 ${text(args.path)}`, rows: [["标题", text(args.title)]] };
     case "create_powerpoint":
@@ -2048,17 +2004,14 @@ function describeApproval(tool, args = {}) {
 function removeApprovalCard() {
   state.approvalCard?.remove();
   state.approvalCard = null;
-  elements.approvalDock.classList.add("hidden");
-  // Restore the composer: the SAME box that became the approval prompt.
-  elements.composer.classList.remove("hidden");
-  elements.attachmentList.classList.toggle("hidden", state.pendingAttachments.length === 0);
+  elements.composer.classList.remove("approval-active");
 }
 
 function renderApprovalCard(approval) {
   removeApprovalCard();
   const described = describeApproval(approval.tool, approval.arguments || {});
   const card = document.createElement("div");
-  card.className = "approval-inline";
+  card.className = "approval-embed";
 
   const head = document.createElement("div");
   head.className = "approval-inline-head";
@@ -2106,13 +2059,13 @@ function renderApprovalCard(approval) {
   actions.append(allow, always, deny);
   card.append(actions);
 
-  // Claude Code behaviour: the input box itself BECOMES the approval prompt.
-  // Hide the composer and show the card in its place, styled like the composer.
-  elements.composer.classList.add("hidden");
-  elements.attachmentList.classList.add("hidden");
-  elements.approvalDock.replaceChildren(card);
-  elements.approvalDock.classList.remove("hidden");
+  // The approval is part of the SAME composer dialog: the buttons grow inside
+  // it while the textarea stays usable, so the user can still type steering
+  // guidance (Enter sends it to the running task) instead of only clicking.
+  elements.composer.prepend(card);
+  elements.composer.classList.add("approval-active");
   state.approvalCard = card;
+  elements.prompt.focus();
 }
 
 async function pollApprovals() {

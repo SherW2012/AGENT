@@ -188,17 +188,6 @@ API，免费抓取的质量天花板远低于此。设置 → 联网搜索 → �
 
 联网搜索不得携带患者标识、API Key、内部路径、私有主机名、私有代码或公司机密内容。答案使用搜索结果时需要给出来源标题和 URL。
 
-## 定时任务
-
-定时任务是**核心基础设施而不是 skill**（与 Claude Code 的 Cron 工具同构）：skill 只是
-提示词包，没有常驻进程去触发定时器。对话中直接说“每天 09:00 跑一遍 Debug 编译”即可，
-模型会调用 `create_scheduled_task`（写入类，需审批）；`list_scheduled_tasks` /
-`delete_scheduled_task` 负责查看与删除。支持两种周期：每 N 分钟（`interval`，≥5 分钟）
-和每天固定时间（`daily`）。配置存于用户数据目录 `schedules.json`；服务内的调度线程每
-20 秒检查一次，到点的任务在**独立的新会话**（标题带 ⏰）中执行，不打扰当前对话。诚实
-的限制：只有本地服务运行时才会触发，错过的时间点跳过不补跑；同一时刻已有任务在执行
-时本次触发会跳过。
-
 ## 记忆：显式 + 隐式
 
 - **显式记忆**（原有）：用户明确说“记住……”时，走 `append_agent_memory` 写入本机
@@ -220,8 +209,6 @@ API，免费抓取的质量天花板远低于此。设置 → 联网搜索 → �
   `include_usage`）；设置 → 审计日志页顶部显示累计用量（存于用户目录 `usage.json`）。
 - **审计日志查看**：设置 → 审计日志，可分页查看每次工具调用、审批与安全事件
   （时间为 UTC，敏感字段已脱敏），用于问题定位与管理复查。
-- **系统通知**：定时任务完成/跳过通过浏览器 Notification 发系统级通知（Win11 通知
-  中心样式）；首次发送任务时会请求通知权限，未授权时退回页面内提示。
 
 ## 会话与 Skill 的存储位置
 
@@ -256,7 +243,7 @@ powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
 
 产物是 `dist\BNCT-Agent-win64.zip`：同事解压后**双击 `BNCT-Agent.exe` 即可使用，
 无需安装 Python**（PyInstaller 已把运行时打进包里）。包内含全部出厂 skill、示例数据
-和《使用说明.txt》；默认工作目录是包内的 `workspace\`，每个人的会话/记忆/定时任务存
+和《使用说明.txt》；默认工作目录是包内的 `workspace\`，每个人的会话/记忆存
 在各自的 `%USERPROFILE%\.bnct_agent\`。同事只需要自备模型 API Key（设置页填入）。
 注意 PyInstaller 不能跨平台构建，Windows 包必须在 Windows 上打。
 

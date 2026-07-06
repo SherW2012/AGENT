@@ -48,7 +48,7 @@ BNCT TPS Agent 使用说明
    - Kimi 支持图片识别；DeepSeek 为纯文本。
 
 3. 工作目录默认是本文件夹下的 workspace\，可在设置中切换到任意工程目录。
-   会话历史、导入的 skill、定时任务保存在 %USERPROFILE%\.bnct_agent\。
+   会话历史、导入的 skill 保存在 %USERPROFILE%\.bnct_agent\。
 
 4. 关闭控制台窗口即退出服务。
 
