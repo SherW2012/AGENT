@@ -558,6 +558,38 @@ svg {
 }
 .activity-panel.done .activity-title > span { animation: none; background: var(--green); box-shadow: none; }
 .activity-panel.failed .activity-title > span { animation: none; background: var(--red); box-shadow: none; }
+/* Finished runs collapse to one quiet line (Claude-style); the recorded trace
+   expands on click for anyone who wants the play-by-play. */
+.activity-panel.collapsed {
+  gap: 0;
+  cursor: pointer;
+  user-select: none;
+  width: fit-content;
+}
+.activity-panel.collapsed .activity-title {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.activity-panel.collapsed .activity-title::after {
+  content: "▸";
+  margin-left: 2px;
+  color: var(--muted);
+  font-size: 9px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.activity-panel.collapsed:hover .activity-title::after { opacity: 0.9; }
+.activity-panel.collapsed.expanded .activity-title::after { content: "▾"; opacity: 0.9; }
+.activity-panel.collapsed:not(.expanded) .activity-list { display: none !important; }
+.activity-panel.collapsed.expanded {
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--glass-soft);
+  border-color: var(--line-soft);
+  border-radius: 10px;
+}
+.activity-panel.collapsed .activity-title > span { width: 6px; height: 6px; }
 
 .composer-zone { padding: 0 clamp(24px, 5vw, 86px) 14px; background: linear-gradient(to top, var(--bg-2) 80%, transparent); }
 

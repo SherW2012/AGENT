@@ -1004,12 +1004,17 @@ function setActivity(draft, key, label, status = "active", detail = "") {
 
 function renderActivity(draft) {
   if (!draft) return;
+  // After the run ends the panel collapses to ONE final line (已完成/已停止/
+  // 任务失败, Claude-style); the full trace stays available on click.
+  const finalItem = draft.activities.find((item) => item.key === "agent");
   const active = draft.activities.find((item) => item.status === "active");
   const waiting = draft.activities.find((item) => item.status === "waiting");
-  const current = waiting || active || draft.activities.at(-1);
+  const current = draft.finalized
+    ? (finalItem || draft.activities.at(-1))
+    : (waiting || active || draft.activities.at(-1));
   draft.activityTitle.textContent = current?.label || "正在处理";
   draft.activityList.replaceChildren();
-  const history = draft.activities.filter((item) => item !== current).slice(-5);
+  const history = draft.activities.filter((item) => item !== current).slice(draft.finalized ? -50 : -5);
   draft.activityList.classList.toggle("hidden", history.length === 0);
   history.forEach((item) => {
     const row = document.createElement("div");
@@ -1023,6 +1028,20 @@ function renderActivity(draft) {
   });
 }
 
+function collapseActivityPanel(draft) {
+  // Freeze lingering "in progress" rows as finished, shrink the panel to its
+  // final line, and let a click expand the recorded trace.
+  draft.activities.forEach((item) => {
+    if (item.status === "active" || item.status === "waiting") item.status = "done";
+  });
+  draft.activity.classList.add("done", "collapsed");
+  draft.activity.title = "点击展开/收起执行过程";
+  draft.activity.addEventListener("click", () => {
+    draft.activity.classList.toggle("expanded");
+  });
+  renderActivity(draft);
+}
+
 function finalizeAssistantDraft(draft, rawText = "", options = {}) {
   if (!draft || draft.finalized) return;
   draft.finalized = true;
@@ -1033,8 +1052,8 @@ function finalizeAssistantDraft(draft, rawText = "", options = {}) {
   }
   draft.meta.textContent = metaText;
   setActivity(draft, "agent", options.stopped ? "已停止" : "已完成", options.stopped ? "failed" : "done");
-  draft.activity.classList.add("done");
   if (options.stopped) draft.activity.classList.add("failed");
+  collapseActivityPanel(draft);
   addMessageActions(draft.article, rawText, draft.task || "");
 }
 
@@ -1044,6 +1063,7 @@ function failAssistantDraft(draft, message) {
   draft.meta.textContent = "BNCT Agent 已中断";
   setActivity(draft, "agent", "任务失败", "failed", message);
   draft.activity.classList.add("failed");
+  collapseActivityPanel(draft);
 }
 
 function resizePrompt() {

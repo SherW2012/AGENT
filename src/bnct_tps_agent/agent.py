@@ -744,7 +744,7 @@ class AgentRuntime:
                     # arguments back verbatim and let the model do the search.
                     round_had_search = True
                     self.audit.record("builtin_web_search", provider=self.settings.provider)
-                    yield {"type": "activity", "key": "builtin-search", "label": "Kimi 联网搜索中"}
+                    yield {"type": "activity", "key": "builtin-search", "label": "Kimi 联网搜索"}
                     self.messages.append(
                         {
                             "role": "tool",
@@ -760,7 +760,7 @@ class AgentRuntime:
                     # model to redo the query with it.
                     round_had_search = True
                     result = self._enter_search_phase(str(function.get("arguments") or "{}"))
-                    yield {"type": "activity", "key": "search-phase", "label": "暂停思考，切换 Kimi 联网搜索"}
+                    yield {"type": "activity", "key": "search-phase", "label": "暂停深度思考，切换 Kimi 联网搜索"}
                     self.messages.append(
                         {
                             "role": "tool",

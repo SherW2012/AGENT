@@ -373,7 +373,7 @@ class ProviderAndAgentTests(unittest.TestCase):
         self.assertNotIn(builtin_decl, completions.requests[3]["tools"])
         # Phase transitions surfaced as activity events for the UI.
         labels = [event.get("label", "") for event in events if event.get("type") == "activity"]
-        self.assertTrue(any("暂停思考" in label for label in labels))
+        self.assertTrue(any("暂停深度思考" in label for label in labels))
         self.assertTrue(any("恢复深度思考" in label for label in labels))
 
     def test_builtin_search_not_offered_when_search_disabled_or_unsupported(self):
