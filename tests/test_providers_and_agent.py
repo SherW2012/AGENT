@@ -55,6 +55,10 @@ class FakeStreamingCompletions:
 
 class FakeRegistry:
     chat_schemas = [{"type": "function", "function": {"name": "list_project_files"}}]
+    # The agent reads the LIVE web-search state from the registry (the quick
+    # toggle flips it there without rebuilding runtimes).
+    web_search_mode = "auto"
+    web_search_network = "auto"
 
     def __init__(self):
         self.calls = []
@@ -339,18 +343,22 @@ class ProviderAndAgentTests(unittest.TestCase):
         self.assertTrue(any(event.get("type") == "activity" for event in events))
 
     def test_builtin_search_not_offered_when_search_disabled_or_unsupported(self):
-        registry = FakeRegistry()
         audit = AuditLogger(self.root / "tests" / "runtime_output" / "builtin-flag-audit")
         client = SimpleNamespace(chat=SimpleNamespace(completions=FakeStreamingCompletions([])))
-        kimi_off = Settings.load(self.root, provider="kimi", api_key="k", web_search_mode="off")
+        # The live toggle flips the mode on the REGISTRY; the agent reads it
+        # from there, so a cached runtime honors the switch immediately.
+        registry_off = FakeRegistry()
+        registry_off.web_search_mode = "off"
+        kimi = Settings.load(self.root, provider="kimi", api_key="k")
         self.assertEqual(
-            AgentRuntime(kimi_off, registry, audit, client=client)._chat_tools(),
-            registry.chat_schemas,
+            AgentRuntime(kimi, registry_off, audit, client=client)._chat_tools(),
+            registry_off.chat_schemas,
         )
-        deepseek_on = Settings.load(self.root, provider="deepseek", api_key="d", web_search_mode="auto")
+        registry_on = FakeRegistry()
+        deepseek = Settings.load(self.root, provider="deepseek", api_key="d")
         self.assertEqual(
-            AgentRuntime(deepseek_on, registry, audit, client=client)._chat_tools(),
-            registry.chat_schemas,
+            AgentRuntime(deepseek, registry_on, audit, client=client)._chat_tools(),
+            registry_on.chat_schemas,
         )
 
     def test_mid_task_steering_is_injected_before_next_round(self):

@@ -446,6 +446,27 @@ class WebServerTests(unittest.TestCase):
             payload = json.loads(response.read().decode("utf-8"))
         self.assertTrue(payload["validation"]["result"]["valid"])
 
+    def test_web_search_quick_toggle_flips_in_place(self):
+        # The quick toggle must NOT rebuild runtimes or rescan skills; it flips
+        # the registry mode in place so the change is instant.
+        registry_before = self.state.registry
+        result = self._post_json("/api/web-search", {"enabled": False})
+        self.assertEqual(result["webSearchEnabled"], False)
+        self.assertIs(self.state.registry, registry_before)
+        self.assertEqual(self.state.registry.web_search_mode, "off")
+        names = {schema["name"] for schema in self.state.registry.schemas}
+        self.assertNotIn("web_search", names)
+        self.assertNotIn("fetch_url", names)
+        config = self._json("/api/config")
+        self.assertFalse(config["webSearchEnabled"])
+
+        result = self._post_json("/api/web-search", {"enabled": True})
+        self.assertTrue(result["webSearchEnabled"])
+        self.assertIs(self.state.registry, registry_before)
+        names = {schema["name"] for schema in self.state.registry.schemas}
+        self.assertIn("fetch_url", names)
+        self.assertTrue(self._json("/api/config")["webSearchEnabled"])
+
     def test_approvals_and_events_are_tagged_with_their_session(self):
         # An approval raised by session A's run must surface as session A's,
         # so the UI never shows it inside whichever session is on screen.

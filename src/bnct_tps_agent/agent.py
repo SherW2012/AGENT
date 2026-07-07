@@ -181,9 +181,11 @@ class AgentRuntime:
             "available, search first and trust the search results over your "
             "training prior."
         )
+        # Read the LIVE mode from the registry, not the frozen settings: the
+        # quick toggle flips it in place without rebuilding runtimes.
         web_search_context = (
-            f"Current web search mode: {self.settings.web_search_mode}. "
-            f"Current web search network path: {self.settings.web_search_network}. "
+            f"Current web search mode: {self.registry.web_search_mode}. "
+            f"Current web search network path: {self.registry.web_search_network}. "
             "Modes are auto, ask, and off; network paths are auto, direct, and system."
         )
         parts = [SYSTEM_INSTRUCTIONS, time_context, web_search_context]
@@ -245,7 +247,7 @@ class AgentRuntime:
         model executes the search on the provider side and we only echo the
         arguments back, per the Moonshot builtin_function contract."""
         tools = list(self.registry.chat_schemas)
-        if self.profile.builtin_search_tool and self.settings.web_search_mode != "off":
+        if self.profile.builtin_search_tool and self.registry.web_search_mode != "off":
             tools.append({
                 "type": "builtin_function",
                 "function": {"name": self.profile.builtin_search_tool},

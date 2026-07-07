@@ -1,5 +1,30 @@
 "use strict";
 
+// ---- Theme: applied first so the page never flashes the wrong colors. ----
+const THEME_STORAGE_KEY = "bnct-agent-theme";
+const themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
+
+function themePreference() {
+  const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+  return ["light", "dark", "auto"].includes(stored) ? stored : "light";
+}
+
+function applyTheme() {
+  const preference = themePreference();
+  const resolved = preference === "auto" ? (themeMedia.matches ? "dark" : "light") : preference;
+  document.documentElement.dataset.theme = resolved;
+}
+
+function setThemePreference(preference) {
+  window.localStorage.setItem(THEME_STORAGE_KEY, preference);
+  applyTheme();
+}
+
+themeMedia.addEventListener("change", () => {
+  if (themePreference() === "auto") applyTheme();
+});
+applyTheme();
+
 const token = new URLSearchParams(window.location.hash.slice(1)).get("token") || "";
 const MAX_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_BYTES = 750_000;
@@ -113,6 +138,16 @@ const elements = {
   quickLinks: document.querySelector("#quick-links"),
   addEventButton: document.querySelector("#add-event-button"),
   addLinkButton: document.querySelector("#add-link-button"),
+  panelFormModal: document.querySelector("#panel-form-modal"),
+  panelFormEyebrow: document.querySelector("#panel-form-eyebrow"),
+  panelFormTitle: document.querySelector("#panel-form-title"),
+  panelForm: document.querySelector("#panel-form"),
+  panelFormFields: document.querySelector("#panel-form-fields"),
+  panelFormError: document.querySelector("#panel-form-error"),
+  panelFormCancel: document.querySelector("#panel-form-cancel"),
+  panelFormSubmit: document.querySelector("#panel-form-submit"),
+  closePanelForm: document.querySelector("#close-panel-form"),
+  themeInputs: document.querySelectorAll('input[name="theme"]'),
 };
 
 async function api(path, options = {}) {
@@ -291,26 +326,23 @@ function renderWebSearchToggle() {
 
 async function toggleWebSearch() {
   if (!state.config) return;
-  if (state.busy) {
-    showToast("任务进行中，稍后再切换联网搜索", "error");
-    return;
-  }
+  // Optimistic flip through the lightweight endpoint: the server only swaps
+  // one flag (no runtime rebuild), so the button reacts instantly and simply
+  // rolls back on failure. Safe mid-task -- the next round picks it up.
   const target = !(state.config.webSearchEnabled !== false);
+  const apply = (value) => {
+    state.config.webSearchEnabled = value;
+    elements.webSearchEnabledToggle.checked = value;
+    renderWebSearchToggle();
+  };
+  apply(target);
   try {
-    const config = await api("/api/config", {
+    await api("/api/web-search", {
       method: "POST",
-      body: JSON.stringify({
-        provider: state.config.provider,
-        model: state.config.model,
-        baseUrl: state.config.baseUrl || "",
-        apiKey: "",
-        root: state.config.root,
-        webSearchEnabled: target,
-      }),
+      body: JSON.stringify({ enabled: target }),
     });
-    updateConfig(config);
-    showToast(target ? "联网搜索已开启" : "联网搜索已关闭");
   } catch (error) {
+    apply(!target);
     showToast(error.message, "error");
   }
 }
@@ -1456,39 +1488,114 @@ function renderQuickLinks() {
   });
 }
 
-async function addCalendarEventFromPanel() {
-  const date = window.prompt("日期（YYYY-MM-DD）：", state.calendar.selected || todayIso());
-  if (date == null) return;
-  const text = window.prompt("日程内容：");
-  if (text == null || !text.trim()) return;
+// ---------- Styled in-app form dialog (calendar entries & quick links) ----------
+
+let panelFormSession = null;
+
+function closePanelForm() {
+  elements.panelFormModal.classList.add("hidden");
+  panelFormSession = null;
+}
+
+function openPanelForm({ eyebrow, title, submitLabel, fields, onSubmit }) {
+  elements.panelFormEyebrow.textContent = eyebrow;
+  elements.panelFormTitle.textContent = title;
+  elements.panelFormSubmit.textContent = submitLabel || "保存";
+  elements.panelFormError.classList.add("hidden");
+  elements.panelFormFields.replaceChildren();
+  const inputs = new Map();
+  fields.forEach((field) => {
+    const label = document.createElement("label");
+    label.className = "panel-form-field";
+    const caption = document.createElement("span");
+    caption.textContent = field.label;
+    if (field.optional) {
+      const hint = document.createElement("em");
+      hint.textContent = "可选";
+      caption.append(hint);
+    }
+    const input = document.createElement("input");
+    input.type = field.type || "text";
+    if (field.placeholder) input.placeholder = field.placeholder;
+    if (field.value) input.value = field.value;
+    if (field.maxLength) input.maxLength = field.maxLength;
+    input.autocomplete = "off";
+    inputs.set(field.key, input);
+    label.append(caption, input);
+    elements.panelFormFields.append(label);
+  });
+  panelFormSession = { onSubmit, inputs };
+  elements.panelFormModal.classList.remove("hidden");
+  const first = inputs.values().next().value;
+  window.setTimeout(() => first?.focus(), 30);
+}
+
+async function submitPanelForm(event) {
+  event.preventDefault();
+  if (!panelFormSession) return;
+  const values = {};
+  panelFormSession.inputs.forEach((input, key) => {
+    values[key] = input.value.trim();
+  });
+  elements.panelFormSubmit.disabled = true;
   try {
-    await api("/api/personal/add-event", {
-      method: "POST",
-      body: JSON.stringify({ date: date.trim(), text: text.trim(), time: "" }),
-    });
-    state.calendar.selected = date.trim();
-    await loadPersonal();
-    showToast("日程已记录");
+    await panelFormSession.onSubmit(values);
+    closePanelForm();
   } catch (error) {
-    showToast(error.message, "error");
+    elements.panelFormError.textContent = error.message;
+    elements.panelFormError.classList.remove("hidden");
+  } finally {
+    elements.panelFormSubmit.disabled = false;
   }
 }
 
-async function addQuickLinkFromPanel() {
-  const name = window.prompt("链接名称：");
-  if (name == null || !name.trim()) return;
-  const url = window.prompt("链接地址（http/https）：", "https://");
-  if (url == null || !url.trim()) return;
-  try {
-    await api("/api/personal/add-link", {
-      method: "POST",
-      body: JSON.stringify({ name: name.trim(), url: url.trim() }),
-    });
-    await loadPersonal();
-    showToast("常用链接已保存");
-  } catch (error) {
-    showToast(error.message, "error");
-  }
+function addCalendarEventFromPanel() {
+  openPanelForm({
+    eyebrow: "CALENDAR",
+    title: "记录日程",
+    submitLabel: "记录",
+    fields: [
+      { key: "date", label: "日期", type: "date", value: state.calendar.selected || todayIso() },
+      { key: "time", label: "时间", type: "time", optional: true },
+      { key: "text", label: "内容", type: "text", placeholder: "例如：评审剂量模块", maxLength: 200 },
+    ],
+    onSubmit: async (values) => {
+      if (!values.date) throw new Error("请选择日期");
+      if (!values.text) throw new Error("请填写日程内容");
+      await api("/api/personal/add-event", {
+        method: "POST",
+        body: JSON.stringify({ date: values.date, text: values.text, time: values.time || "" }),
+      });
+      state.calendar.selected = values.date;
+      const parts = values.date.split("-");
+      state.calendar.year = Number(parts[0]);
+      state.calendar.month = Number(parts[1]) - 1;
+      await loadPersonal();
+      showToast("日程已记录");
+    },
+  });
+}
+
+function addQuickLinkFromPanel() {
+  openPanelForm({
+    eyebrow: "LINKS",
+    title: "添加常用链接",
+    submitLabel: "保存",
+    fields: [
+      { key: "name", label: "名称", type: "text", placeholder: "例如：禅道", maxLength: 40 },
+      { key: "url", label: "地址", type: "url", placeholder: "https://…" },
+    ],
+    onSubmit: async (values) => {
+      if (!values.name) throw new Error("请填写链接名称");
+      if (!values.url) throw new Error("请填写链接地址");
+      await api("/api/personal/add-link", {
+        method: "POST",
+        body: JSON.stringify({ name: values.name, url: values.url }),
+      });
+      await loadPersonal();
+      showToast("常用链接已保存");
+    },
+  });
 }
 
 function skillTone(skill, index) {
@@ -2494,6 +2601,8 @@ function openSettings(section = "connection") {
     elements.webSearchEnabledToggle.checked = state.config.webSearchEnabled !== false;
     elements.autoMemoryToggle.checked = state.config.autoMemory !== false;
   }
+  const themePref = themePreference();
+  elements.themeInputs.forEach((input) => { input.checked = input.value === themePref; });
   switchSettingsSection(section);
   elements.apiKey.value = "";
   elements.settingsModal.classList.remove("hidden");
@@ -2734,6 +2843,16 @@ function bindEvents() {
   elements.calNext.addEventListener("click", () => shiftCalendarMonth(1));
   elements.addEventButton.addEventListener("click", addCalendarEventFromPanel);
   elements.addLinkButton.addEventListener("click", addQuickLinkFromPanel);
+  elements.panelForm.addEventListener("submit", submitPanelForm);
+  elements.panelFormCancel.addEventListener("click", closePanelForm);
+  elements.closePanelForm.addEventListener("click", closePanelForm);
+  elements.panelFormModal.addEventListener("click", (event) => {
+    if (event.target === elements.panelFormModal) closePanelForm();
+  });
+  // Theme radios apply instantly and persist locally; no server round-trip.
+  elements.themeInputs.forEach((input) => input.addEventListener("change", () => {
+    if (input.checked) setThemePreference(input.value);
+  }));
   elements.sidebarToggle.addEventListener("click", () => toggleSidebar(true));
   elements.sidebarExpand.addEventListener("click", () => toggleSidebar(false));
   document.querySelectorAll("[data-task]").forEach((button) => {
@@ -2743,6 +2862,7 @@ function bindEvents() {
     if (event.key === "Escape") {
       if (!elements.settingsModal.classList.contains("hidden")) closeSettings();
       if (!elements.skillsModal.classList.contains("hidden")) closeSkillsModal();
+      if (!elements.panelFormModal.classList.contains("hidden")) closePanelForm();
     }
   });
 }

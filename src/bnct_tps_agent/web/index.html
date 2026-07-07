@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="light" />
+    <meta name="color-scheme" content="light dark" />
     <title>BNCT TPS Agent</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2300408e'/%3E%3Cpath d='M16 5.5 25 10.75v10.5L16 26.5 7 21.25v-10.5L16 5.5Z' fill='none' stroke='%23ffffff' stroke-width='1.6' opacity='0.55'/%3E%3Ctext x='16' y='21' font-family='Segoe UI,Arial,sans-serif' font-size='13' font-weight='700' fill='%23ffffff' text-anchor='middle'%3EB%3C/text%3E%3C/svg%3E" />
     <link rel="stylesheet" href="/styles.css" />
@@ -236,6 +236,10 @@
               <span>联网搜索</span>
               <small>开关与搜索通道说明</small>
             </button>
+            <button class="settings-tab" type="button" data-settings-section="appearance">
+              <span>外观</span>
+              <small>亮色 / 暗色主题</small>
+            </button>
             <button class="settings-tab" type="button" data-settings-section="memory">
               <span>记忆</span>
               <small>隐式记忆与清理</small>
@@ -319,6 +323,28 @@
               <p class="settings-help" id="web-search-engine-help">搜索通道由所选模型决定：使用 Kimi 时走 Kimi 模型自带的联网搜索（效果最好，按 Kimi 平台计费）；使用 DeepSeek 等无自带搜索的模型时走内置搜索。用户明确要求不联网时，Agent 会遵循指令。</p>
             </section>
 
+            <section class="settings-section" data-settings-section-panel="appearance">
+              <div class="settings-section-heading">
+                <h3>外观</h3>
+                <p>主题只影响本机浏览器显示，立即生效，无需保存。</p>
+              </div>
+              <fieldset class="web-search-picker">
+                <legend>主题</legend>
+                <label class="web-search-option">
+                  <input type="radio" name="theme" value="light" />
+                  <span><strong>亮色</strong><small>默认主题</small></span>
+                </label>
+                <label class="web-search-option">
+                  <input type="radio" name="theme" value="dark" />
+                  <span><strong>暗色</strong><small>同风格深色调</small></span>
+                </label>
+                <label class="web-search-option">
+                  <input type="radio" name="theme" value="auto" />
+                  <span><strong>跟随系统</strong><small>随操作系统亮暗切换</small></span>
+                </label>
+              </fieldset>
+            </section>
+
             <section class="settings-section" data-settings-section-panel="memory">
               <div class="settings-section-heading">
                 <h3>隐式记忆</h3>
@@ -356,6 +382,28 @@
             </div>
           </form>
         </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop hidden" id="panel-form-modal">
+      <div class="modal-card panel-form-card" role="dialog" aria-modal="true" aria-labelledby="panel-form-title">
+        <div class="modal-header">
+          <div>
+            <span class="eyebrow" id="panel-form-eyebrow">CALENDAR</span>
+            <h2 id="panel-form-title">记录日程</h2>
+          </div>
+          <button class="icon-button" id="close-panel-form" type="button" aria-label="关闭">
+            <svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
+          </button>
+        </div>
+        <form id="panel-form" class="panel-form">
+          <div id="panel-form-fields"></div>
+          <p class="panel-form-error hidden" id="panel-form-error"></p>
+          <div class="modal-actions">
+            <button class="secondary-button" id="panel-form-cancel" type="button">取消</button>
+            <button class="primary-button" id="panel-form-submit" type="submit">保存</button>
+          </div>
+        </form>
       </div>
     </div>
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import dataclasses
 import hmac
 import json
 import os
@@ -545,6 +546,18 @@ class ApplicationState:
         self.add_event({"type": "session_configured", "provider": provider, "model": model})
         return self.config()
 
+    def set_web_search_enabled(self, enabled: bool) -> dict[str, Any]:
+        """The quick toggle above the composer. Unlike configure(), this flips
+        ONE flag in place: no settings reload, no skill-directory rescan, no
+        runtime/registry rebuild, no event reset -- so it is instant, and safe
+        even while tasks are running (the next reasoning round picks it up)."""
+        mode = "auto" if enabled else "off"
+        with self._state_lock:
+            self.settings = dataclasses.replace(self.settings, web_search_mode=mode)
+            self.registry.set_web_search_mode(mode)
+        self.add_event({"type": "web_search_toggled", "enabled": enabled})
+        return {"ok": True, "webSearchEnabled": enabled}
+
     def new_session(self) -> dict[str, Any]:
         session = self.sessions.create("新会话")
         self.current_session_id = str(session["id"])
@@ -1080,6 +1093,8 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
                 )
             elif parsed.path == "/api/memory/clear-auto":
                 self._send_json(self.server.state.clear_auto_memory())
+            elif parsed.path == "/api/web-search":
+                self._send_json(self.server.state.set_web_search_enabled(bool(payload.get("enabled"))))
             elif parsed.path == "/api/personal/add-event":
                 self._send_json(add_calendar_entry(
                     self.server.state.data_dir,

@@ -103,6 +103,14 @@ class ToolRegistry:
         self.builtin_search = builtin_search
         self._tools = {tool.name: tool for tool in self._build_tools()}
 
+    def set_web_search_mode(self, mode: str) -> None:
+        """Flip web search on/off in place. Only the tool table is rebuilt
+        (reusing the already-discovered skill registry), so the toggle is
+        instant -- no runtime rebuild, no disk rescan. Cached AgentRuntimes
+        keep referencing this same registry and see the change immediately."""
+        self.web_search_mode = mode
+        self._tools = {tool.name: tool for tool in self._build_tools()}
+
     def _emit(self, event: dict[str, Any]) -> None:
         if self.event_callback is None:
             return
