@@ -463,7 +463,11 @@ class ToolRegistry:
             tools.append(
                 Tool(
                     "fetch_url",
-                    "Fetch and extract readable text from one explicit public http(s) URL. Use this instead of web_search when the user gives a specific URL to open, read, inspect, or analyze. Local/private hosts and credential-bearing URLs are blocked.",
+                    "Fetch and extract readable text from one explicit public http(s) URL. Use this instead of "
+                    "web_search when the user gives a specific URL to open, read, inspect, or analyze. "
+                    "Local/private hosts and credential-bearing URLs are blocked. Timeouts are common for "
+                    "slow or regionally blocked sites -- on TimeoutError, move on to a different source "
+                    "instead of retrying the same URL.",
                     {
                         **object_schema,
                         "properties": {

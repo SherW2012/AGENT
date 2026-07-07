@@ -801,7 +801,7 @@ function addMessageActions(article, rawText, retryTask) {
     editLabel.textContent = "编辑";
     editBtn.append(svgIcon(["M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17z", "m13.5 6.5 4 4"]), editLabel);
     editBtn.addEventListener("click", () => enterUserMessageEdit(article, rawText));
-    row.append(editBtn);
+    row.prepend(editBtn);
     article.append(row);
   } else {
     body.append(row);
@@ -983,6 +983,55 @@ function appendAssistantDraft(sessionId) {
   return draft;
 }
 
+function ensureReasoningBlock(draft) {
+  // Vendor-style 思考 block: streams the model's chain of thought above the
+  // answer, collapses to one line when thinking ends, expands on click.
+  if (draft.reasoningUi) return draft.reasoningUi;
+  const wrap = document.createElement("div");
+  wrap.className = "reasoning-block open";
+  const head = document.createElement("button");
+  head.type = "button";
+  head.className = "reasoning-head";
+  const dot = document.createElement("span");
+  dot.className = "reasoning-dot";
+  const label = document.createElement("strong");
+  label.textContent = "深度思考中…";
+  head.append(dot, label);
+  const body = document.createElement("div");
+  body.className = "reasoning-body";
+  head.addEventListener("click", () => wrap.classList.toggle("open"));
+  wrap.append(head, body);
+  draft.content.before(wrap);
+  draft.reasoningUi = { wrap, label, body, text: "", finished: false };
+  return draft.reasoningUi;
+}
+
+function appendReasoningText(draft, text) {
+  const ui = ensureReasoningBlock(draft);
+  if (ui.finished) {
+    // A new thinking round started (e.g. after tool calls): reopen live view.
+    ui.finished = false;
+    ui.wrap.classList.add("open");
+    ui.wrap.classList.remove("finished");
+    ui.label.textContent = "深度思考中…";
+    ui.text += "\n\n";
+  }
+  ui.text += text;
+  ui.body.textContent = ui.text;
+  if (state.stickToBottom && draft.session === state.currentSessionId) {
+    elements.conversation.scrollTo({ top: elements.conversation.scrollHeight });
+  }
+}
+
+function finishReasoningBlock(draft) {
+  const ui = draft.reasoningUi;
+  if (!ui || ui.finished) return;
+  ui.finished = true;
+  ui.label.textContent = "思考已完成";
+  ui.wrap.classList.add("finished");
+  ui.wrap.classList.remove("open");
+}
+
 function setDraftText(draft, text) {
   if (!draft) return;
   renderMarkdown(draft.content, text);
@@ -1053,6 +1102,7 @@ function finalizeAssistantDraft(draft, rawText = "", options = {}) {
     metaText += ` · ↑${usage.promptTokens} ↓${usage.completionTokens} tokens`;
   }
   draft.meta.textContent = metaText;
+  finishReasoningBlock(draft);
   setActivity(draft, "agent", options.stopped ? "已停止" : "已完成", options.stopped ? "failed" : "done");
   if (options.stopped) draft.activity.classList.add("failed");
   collapseActivityPanel(draft);
@@ -1063,6 +1113,7 @@ function failAssistantDraft(draft, message) {
   if (!draft || draft.finalized) return;
   draft.finalized = true;
   draft.meta.textContent = "BNCT Agent 已中断";
+  finishReasoningBlock(draft);
   setActivity(draft, "agent", "任务失败", "failed", message);
   draft.activity.classList.add("failed");
   collapseActivityPanel(draft);
@@ -2170,8 +2221,12 @@ async function sendTask(prefilled = null) {
       },
       (event) => {
         if (event.type === "delta") {
+          // Visible answer text means the current thinking round is over.
+          finishReasoningBlock(draft);
           answerText += event.text || "";
           pendingText += event.text || "";
+        } else if (event.type === "reasoning") {
+          appendReasoningText(draft, event.text || "");
         } else if (event.type === "activity") {
           // Provider-side actions (e.g. Kimi builtin web search) that have no
           // local tool events still surface in the activity panel.
@@ -2917,6 +2972,7 @@ function bindEvents() {
     if (input.checked) setThemePreference(input.value);
   }));
   elements.searchSelfTest.addEventListener("click", runSearchSelfTest);
+  elements.modelPill.addEventListener("click", () => openSettings("connection"));
   elements.sidebarToggle.addEventListener("click", () => toggleSidebar(true));
   elements.sidebarExpand.addEventListener("click", () => toggleSidebar(false));
   document.querySelectorAll("[data-task]").forEach((button) => {

@@ -915,6 +915,11 @@ class ApplicationState:
 
 class AgentHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
+    # The UI keeps a streaming request open, polls events every 650ms, and the
+    # user clicks panel actions in parallel; the default accept backlog of 5
+    # intermittently refused connections under those bursts ("添加失败"). The
+    # handlers are already one-thread-per-request; only the backlog was small.
+    request_queue_size = 64
 
     def __init__(self, address: tuple[str, int], state: ApplicationState):
         super().__init__(address, AgentRequestHandler)

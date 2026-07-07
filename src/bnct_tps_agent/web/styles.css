@@ -817,10 +817,14 @@ svg {
   border: 1px solid var(--line-soft);
   border-radius: 7px;
   color: var(--text-soft);
+  cursor: pointer;
   font-family: var(--mono);
+  font-size: inherit;
   text-overflow: ellipsis;
+  transition: 130ms ease;
   white-space: nowrap;
 }
+.model-pill:hover { background: var(--panel-3); border-color: var(--line-strong); color: var(--text); }
 .shortcut-hint { white-space: nowrap; }
 .send-button {
   display: grid;
@@ -1704,3 +1708,61 @@ svg {
 }
 .doctor-dot.ok { background: var(--green); }
 .doctor-dot.bad { background: var(--red); }
+
+/* ---- 深度思考块：流式展示 CoT，完成后折叠一行，点击展开 ---- */
+.reasoning-block {
+  max-width: 620px;
+  margin: 2px 0 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 11px;
+  background: var(--glass-soft);
+  overflow: hidden;
+}
+.reasoning-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 11px;
+  background: transparent;
+  border: 0;
+  color: var(--text-soft);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 640;
+  text-align: left;
+}
+.reasoning-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--violet);
+  box-shadow: 0 0 0 4px rgba(116, 105, 182, 0.12);
+  animation: pulse 1.25s infinite;
+}
+.reasoning-block.finished .reasoning-dot { animation: none; box-shadow: none; background: var(--muted); }
+.reasoning-block.finished .reasoning-head { color: var(--muted); font-weight: 600; }
+.reasoning-head::after {
+  content: "▾";
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10px;
+  transition: transform 140ms ease;
+}
+.reasoning-block:not(.open) .reasoning-head::after { transform: rotate(-90deg); }
+.reasoning-body {
+  display: none;
+  max-height: 300px;
+  overflow: auto;
+  padding: 2px 12px 11px;
+  border-top: 1px dashed var(--line-soft);
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+.reasoning-block.open .reasoning-body { display: block; }

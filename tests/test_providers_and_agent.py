@@ -403,6 +403,46 @@ class ProviderAndAgentTests(unittest.TestCase):
             registry_on.chat_schemas,
         )
 
+    def test_reasoning_content_streams_and_echoes_into_tool_rounds(self):
+        # Thinking models stream reasoning_content; it must surface as
+        # "reasoning" events for the UI's 思考 block, stay OUT of the answer,
+        # and be echoed inside the assistant tool-call message (DeepSeek
+        # reasoner / Kimi thinking require it during tool loops).
+        round_one = [
+            SimpleNamespace(id="r", choices=[SimpleNamespace(
+                delta=SimpleNamespace(content=None, reasoning_content="让我想想要查什么"), finish_reason=None)]),
+            SimpleNamespace(id="r", choices=[SimpleNamespace(
+                delta=SimpleNamespace(
+                    content=None,
+                    tool_calls=[SimpleNamespace(
+                        index=0, id="call-1", type="function",
+                        function=SimpleNamespace(name="list_project_files", arguments='{"pattern":"*","limit":3}'),
+                    )],
+                ),
+                finish_reason="tool_calls",
+            )],
+        ),
+        ]
+        round_two = [
+            SimpleNamespace(id="r", choices=[SimpleNamespace(delta=SimpleNamespace(content="答案"), finish_reason="stop")]),
+        ]
+        completions = FakeStreamingCompletions([round_one, round_two])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        registry = FakeRegistry()
+        settings = Settings.load(self.root, provider="deepseek", api_key="test-key")
+        audit = AuditLogger(self.root / "tests" / "runtime_output" / "reasoning-audit")
+        runtime = AgentRuntime(settings, registry, audit, client=client)
+
+        events = list(runtime.run_events("检查工程"))
+        reasoning = [event["text"] for event in events if event["type"] == "reasoning"]
+        self.assertEqual(reasoning, ["让我想想要查什么"])
+        self.assertEqual(events[-1]["answer"], "答案")  # CoT never leaks into the answer
+        tool_round_message = next(
+            message for message in runtime.messages
+            if message.get("role") == "assistant" and message.get("tool_calls")
+        )
+        self.assertEqual(tool_round_message.get("reasoning_content"), "让我想想要查什么")
+
     def test_step_budget_pauses_gracefully_and_can_continue(self):
         # Long agentic skills hit the per-turn round budget mid-flight. That
         # must PAUSE the run (progress + conversation state kept, user replies

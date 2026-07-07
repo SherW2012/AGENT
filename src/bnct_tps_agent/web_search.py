@@ -364,7 +364,10 @@ def fetch_url(_root: Path, url: str, max_chars: int = DEFAULT_FETCH_CHARS, netwo
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7",
         },
     )
-    with _open_url(request, timeout=14, network=network) as response:
+    # Fail fast: blocked/slow pages (common for overseas sites reached from a
+    # CN network) should time out quickly so the model moves to another source
+    # instead of stalling the run.
+    with _open_url(request, timeout=10, network=network) as response:
         headers = getattr(response, "headers", None)
         content_type = headers.get("Content-Type", "") if headers is not None else ""
         charset = headers.get_content_charset() if headers is not None else None

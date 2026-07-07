@@ -674,6 +674,7 @@ class AgentRuntime:
 
             response_id = ""
             content_parts: list[str] = []
+            reasoning_parts: list[str] = []
             tool_fragments: dict[int, dict[str, Any]] = {}
             interrupted = False
             step_emitted_text = False
@@ -691,6 +692,15 @@ class AgentRuntime:
                 delta = _field(choice, "delta", None)
                 if delta is None:
                     continue
+
+                # Thinking models (Kimi k2.x, DeepSeek reasoner/v4 thinking)
+                # stream their chain of thought as reasoning_content; surface it
+                # so the UI can show a collapsible 思考 block like the vendors do.
+                reasoning_delta = _field(delta, "reasoning_content", None)
+                if reasoning_delta:
+                    reasoning_delta = str(reasoning_delta)
+                    reasoning_parts.append(reasoning_delta)
+                    yield {"type": "reasoning", "text": reasoning_delta}
 
                 text_delta = _field(delta, "content", None)
                 if text_delta:
@@ -727,6 +737,11 @@ class AgentRuntime:
                         if arguments:
                             fragment["function"]["arguments"] += str(arguments)
 
+            # Thinking providers (DeepSeek reasoner, Kimi thinking) want the
+            # round's reasoning_content echoed back inside the assistant
+            # message during tool loops; harmless for models without it.
+            reasoning_text = "".join(reasoning_parts)
+
             if interrupted:
                 text = "".join(content_parts) or "（已停止）"
                 self.messages.append({"role": "assistant", "content": text})
@@ -744,6 +759,8 @@ class AgentRuntime:
             assistant_text = "".join(content_parts)
             if assistant_text:
                 assistant_message["content"] = assistant_text
+            if reasoning_text:
+                assistant_message["reasoning_content"] = reasoning_text
             self.messages.append(assistant_message)
 
             round_had_search = False
