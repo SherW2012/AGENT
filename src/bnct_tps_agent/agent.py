@@ -214,13 +214,14 @@ class AgentRuntime:
                 f"the provider builtin {self.profile.builtin_search_tool} cannot be active in the "
                 "same request, so the run alternates automatically. By default you run WITH deep "
                 "thinking. When you need to search, simply call the web_search function: the "
-                "first call switches the run into the search phase -- thinking pauses and "
-                f"{self.profile.builtin_search_tool} (provider-side, best quality) appears in "
-                "your tool list; use it for the actual queries, as many as needed. Once you "
-                "finish a round without any search calls, deep thinking resumes automatically. "
-                "NEVER tell the user you lack web search or that you can only fetch known URLs "
-                "while this mode is enabled; if asked why thinking pauses during searches, "
-                "explain it is a documented provider limitation."
+                "first call switches the run into the search phase -- thinking pauses, "
+                f"{self.profile.builtin_search_tool} (provider-side, best quality) replaces "
+                "web_search in your tool list; use it for ALL queries, as many as needed, and "
+                "fetch_url to read result pages. Once you finish a round with no search or fetch "
+                "calls, deep thinking resumes and the tool list reverts. NEVER tell the user you "
+                "lack web search or that you can only fetch known URLs while this mode is "
+                "enabled; if asked why thinking pauses during searches, explain it is a "
+                "documented provider limitation."
             )
         elif self.profile.builtin_search_tool:
             search_capability = (
@@ -319,12 +320,21 @@ class AgentRuntime:
             and (not conflicts or self._search_phase)
         )
         if offer_builtin:
+            if conflicts:
+                # Search phase: the builtin is live (thinking off), so the poor
+                # local scraper leaves the table entirely -- otherwise the model
+                # can keep grabbing the familiar web_search and loop on garbage
+                # results instead of using the provider's search.
+                tools = [
+                    tool for tool in tools
+                    if (tool.get("function") or {}).get("name") != "web_search"
+                ]
+                kwargs["tools"] = tools
+                kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
             tools.append({
                 "type": "builtin_function",
                 "function": {"name": self.profile.builtin_search_tool},
             })
-            if conflicts:
-                kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
         return kwargs
 
     def _chat_tools(self) -> list[dict[str, Any]]:
@@ -352,9 +362,10 @@ class AgentRuntime:
             "result": {
                 "message": (
                     "已切换到联网搜索阶段：深度思考临时暂停，provider 自带搜索 "
-                    f"{self.profile.builtin_search_tool} 已加入你的工具列表。"
-                    f"请立即改用 {self.profile.builtin_search_tool} 重新执行这次查询，"
-                    "并用它完成后续所有搜索（本地 web_search 仍可作兜底）。"
+                    f"{self.profile.builtin_search_tool} 已加入你的工具列表，"
+                    "本地 web_search 已同时撤下（搜索阶段只保留高质量通道）。"
+                    f"请立即用 {self.profile.builtin_search_tool} 重新执行这次查询，"
+                    "并用它完成后续所有搜索；可以配合 fetch_url 阅读结果页。"
                     "当你结束搜集、开始整理或写作后，深度思考会自动恢复。"
                 ),
                 "original_arguments": arguments_json,
@@ -586,7 +597,7 @@ class AgentRuntime:
                         }
                     )
                     continue
-                if name == "web_search":
+                if name in ("web_search", "fetch_url"):
                     round_had_search = True
                 try:
                     arguments = json.loads(function.arguments)
@@ -769,7 +780,9 @@ class AgentRuntime:
                         }
                     )
                     continue
-                if name == "web_search":
+                if name in ("web_search", "fetch_url"):
+                    # Reading result pages is still material gathering; do not
+                    # bounce out of the search phase between search and fetch.
                     round_had_search = True
                 try:
                     arguments = json.loads(str(function.get("arguments") or "{}"))

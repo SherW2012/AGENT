@@ -54,7 +54,10 @@ class FakeStreamingCompletions:
 
 
 class FakeRegistry:
-    chat_schemas = [{"type": "function", "function": {"name": "list_project_files"}}]
+    chat_schemas = [
+        {"type": "function", "function": {"name": "list_project_files"}},
+        {"type": "function", "function": {"name": "web_search"}},
+    ]
     # The agent reads the LIVE web-search state from the registry (the quick
     # toggle flips it there without rebuilding runtimes).
     web_search_mode = "auto"
@@ -360,17 +363,22 @@ class ProviderAndAgentTests(unittest.TestCase):
         redirect = completions.requests[1]["messages"][-1]
         self.assertEqual(redirect["role"], "tool")
         self.assertIn("$web_search", redirect["content"])
-        # Rounds 2-3 requests: search phase -> thinking paused, builtin offered.
+        # Rounds 2-3 requests: search phase -> thinking paused, builtin offered,
+        # and the poor local scraper is OFF the table so the model cannot loop
+        # on garbage results instead of using the provider search.
+        local_decl = {"type": "function", "function": {"name": "web_search"}}
         for index in (1, 2):
             self.assertEqual(completions.requests[index]["extra_body"], {"thinking": {"type": "disabled"}})
             self.assertIn(builtin_decl, completions.requests[index]["tools"])
+            self.assertNotIn(local_decl, completions.requests[index]["tools"])
         # The $web_search echo went back verbatim.
         echo = completions.requests[2]["messages"][-1]
         self.assertEqual(echo["content"], '{"search_id":"abc"}')
         # Round 4 request: gathering ended (round 3 had no search calls) ->
-        # thinking restored, builtin withdrawn.
+        # thinking restored, builtin withdrawn, local web_search back in place.
         self.assertNotIn("extra_body", completions.requests[3])
         self.assertNotIn(builtin_decl, completions.requests[3]["tools"])
+        self.assertIn(local_decl, completions.requests[3]["tools"])
         # Phase transitions surfaced as activity events for the UI.
         labels = [event.get("label", "") for event in events if event.get("type") == "activity"]
         self.assertTrue(any("暂停深度思考" in label for label in labels))
