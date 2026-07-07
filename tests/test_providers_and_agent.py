@@ -309,10 +309,9 @@ class ProviderAndAgentTests(unittest.TestCase):
         list(runtime.run_events("再来"))
         self.assertIn(_time.strftime("%Y-%m-%d"), completions.requests[1]["messages"][0]["content"])
 
-    def test_kimi_builtin_web_search_is_offered_and_echoed(self):
-        # Round 1: the model invokes its builtin $web_search; we must echo the
-        # arguments back verbatim (Moonshot contract). Round 2: the answer.
-        round_one = [
+    @staticmethod
+    def _tool_call_round(name, arguments, call_type="function", call_id="call-1"):
+        return [
             SimpleNamespace(
                 id="r",
                 choices=[SimpleNamespace(
@@ -320,44 +319,62 @@ class ProviderAndAgentTests(unittest.TestCase):
                         content=None,
                         tool_calls=[SimpleNamespace(
                             index=0,
-                            id="call-ws",
-                            type="builtin_function",
-                            function=SimpleNamespace(name="$web_search", arguments='{"search_id":"abc"}'),
+                            id=call_id,
+                            type=call_type,
+                            function=SimpleNamespace(name=name, arguments=arguments),
                         )],
                     ),
                     finish_reason="tool_calls",
                 )],
             ),
         ]
-        round_two = [
-            SimpleNamespace(id="r", choices=[SimpleNamespace(delta=SimpleNamespace(content="搜到了"), finish_reason="stop")]),
+
+    def test_kimi_search_phase_pauses_thinking_then_restores_it(self):
+        # Deep thinking is the default. Round 1: the model asks to search via
+        # the local web_search -> the run enters the search phase (thinking
+        # paused, builtin enabled) WITHOUT running the poor local scraper.
+        # Round 2: the model redoes the query with $web_search -> echo the
+        # arguments verbatim (Moonshot contract). Round 3: a non-search tool
+        # round ends the gathering -> thinking restored. Round 4: final text.
+        rounds = [
+            self._tool_call_round("web_search", '{"query":"户晨风 街头采访","max_results":5,"recency":true}'),
+            self._tool_call_round("$web_search", '{"search_id":"abc"}', call_type="builtin_function", call_id="call-ws"),
+            self._tool_call_round("list_project_files", '{"pattern":"*","limit":3}', call_id="call-fs"),
+            [SimpleNamespace(id="r", choices=[SimpleNamespace(delta=SimpleNamespace(content="搜到了"), finish_reason="stop")])],
         ]
-        completions = FakeStreamingCompletions([round_one, round_two])
+        completions = FakeStreamingCompletions(rounds)
         client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
         registry = FakeRegistry()
         settings = Settings.load(self.root, provider="kimi", api_key="test-key")
         audit = AuditLogger(self.root / "tests" / "runtime_output" / "builtin-search-audit")
 
-        events = list(AgentRuntime(settings, registry, audit, client=client).run_events("最新的 BNCT 进展"))
-
+        events = list(AgentRuntime(settings, registry, audit, client=client).run_events("调研户晨风"))
         self.assertEqual(events[-1]["answer"], "搜到了")
-        # The builtin tool was offered alongside local tools.
-        offered = completions.requests[0]["tools"]
-        self.assertIn(
-            {"type": "builtin_function", "function": {"name": "$web_search"}},
-            offered,
-        )
-        # Documented Moonshot limitation: $web_search is unusable while
-        # thinking mode is on, so offering it must disable thinking.
-        self.assertEqual(completions.requests[0]["extra_body"], {"thinking": {"type": "disabled"}})
-        self.assertEqual(completions.requests[1]["extra_body"], {"thinking": {"type": "disabled"}})
-        # The echo went back verbatim and the local registry was NOT called.
-        tool_message = completions.requests[1]["messages"][-1]
-        self.assertEqual(tool_message["role"], "tool")
-        self.assertEqual(tool_message["content"], '{"search_id":"abc"}')
-        self.assertEqual(registry.calls, [])
-        # An activity event surfaced for the UI.
-        self.assertTrue(any(event.get("type") == "activity" for event in events))
+
+        builtin_decl = {"type": "builtin_function", "function": {"name": "$web_search"}}
+        # Round 1 request: thinking ON (no extra_body), no builtin offered.
+        self.assertNotIn("extra_body", completions.requests[0])
+        self.assertNotIn(builtin_decl, completions.requests[0]["tools"])
+        # The web_search call was intercepted as the phase switch, not scraped.
+        self.assertEqual(registry.calls, [("list_project_files", {"pattern": "*", "limit": 3})])
+        redirect = completions.requests[1]["messages"][-1]
+        self.assertEqual(redirect["role"], "tool")
+        self.assertIn("$web_search", redirect["content"])
+        # Rounds 2-3 requests: search phase -> thinking paused, builtin offered.
+        for index in (1, 2):
+            self.assertEqual(completions.requests[index]["extra_body"], {"thinking": {"type": "disabled"}})
+            self.assertIn(builtin_decl, completions.requests[index]["tools"])
+        # The $web_search echo went back verbatim.
+        echo = completions.requests[2]["messages"][-1]
+        self.assertEqual(echo["content"], '{"search_id":"abc"}')
+        # Round 4 request: gathering ended (round 3 had no search calls) ->
+        # thinking restored, builtin withdrawn.
+        self.assertNotIn("extra_body", completions.requests[3])
+        self.assertNotIn(builtin_decl, completions.requests[3]["tools"])
+        # Phase transitions surfaced as activity events for the UI.
+        labels = [event.get("label", "") for event in events if event.get("type") == "activity"]
+        self.assertTrue(any("暂停思考" in label for label in labels))
+        self.assertTrue(any("恢复深度思考" in label for label in labels))
 
     def test_builtin_search_not_offered_when_search_disabled_or_unsupported(self):
         audit = AuditLogger(self.root / "tests" / "runtime_output" / "builtin-flag-audit")

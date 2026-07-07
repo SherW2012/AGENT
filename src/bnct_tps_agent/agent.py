@@ -177,6 +177,9 @@ class AgentRuntime:
         self.audit = audit
         self.previous_response_id: str | None = None
         self.turn_usage: dict[str, int] = {"promptTokens": 0, "completionTokens": 0}
+        # True while this run is gathering material via provider builtin search
+        # (thinking paused); reset at every turn start and once gathering ends.
+        self._search_phase = False
         self._memory_context = memory_context
         self.instructions = self._build_instructions(memory_context)
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": self.instructions}]
@@ -205,6 +208,20 @@ class AgentRuntime:
                 "If a question needs fresh public information, say the user can enable web "
                 "search with the toggle above the input box."
             )
+        elif self.profile.builtin_search_tool and self.profile.builtin_search_conflicts_with_thinking:
+            search_capability = (
+                "Web search is ENABLED and you HAVE it. Provider limitation: deep thinking and "
+                f"the provider builtin {self.profile.builtin_search_tool} cannot be active in the "
+                "same request, so the run alternates automatically. By default you run WITH deep "
+                "thinking. When you need to search, simply call the web_search function: the "
+                "first call switches the run into the search phase -- thinking pauses and "
+                f"{self.profile.builtin_search_tool} (provider-side, best quality) appears in "
+                "your tool list; use it for the actual queries, as many as needed. Once you "
+                "finish a round without any search calls, deep thinking resumes automatically. "
+                "NEVER tell the user you lack web search or that you can only fetch known URLs "
+                "while this mode is enabled; if asked why thinking pauses during searches, "
+                "explain it is a documented provider limitation."
+            )
         elif self.profile.builtin_search_tool:
             search_capability = (
                 "Web search is ENABLED and you HAVE it, through two tools: the provider builtin "
@@ -213,12 +230,6 @@ class AgentRuntime:
                 "missing from your tool list or fails). NEVER tell the user you lack web search "
                 "or that you can only fetch known URLs while this mode is enabled."
             )
-            if self.profile.builtin_search_conflicts_with_thinking:
-                search_capability += (
-                    " Note: while web search is enabled, deep thinking mode is disabled on this "
-                    "provider (a documented provider limitation, not a malfunction); if the user "
-                    "asks, explain that turning web search off restores deep thinking."
-                )
         else:
             search_capability = (
                 "Web search is ENABLED via the web_search tool. NEVER tell the user you lack "
@@ -290,31 +301,74 @@ class AgentRuntime:
         echo the arguments back, per the Moonshot builtin_function contract.
 
         Documented Moonshot limitation: $web_search is temporarily incompatible
-        with kimi-k2.5/k2.6 thinking mode -- with thinking on (the default) the
-        builtin is silently unusable and the model falls back to the local
-        scraper. So whenever the builtin is offered, the same request disables
-        thinking. Turning web search off restores deep thinking."""
+        with kimi-k2.5/k2.6 thinking mode. Deep thinking is valuable, so it is
+        the DEFAULT: such providers only get the builtin (plus the thinking-off
+        flag) while the run is in its search phase -- entered when the model
+        first asks to search, exited automatically once a round passes with no
+        search calls (see _should_enter_search_phase)."""
         model = self._chat_model()
         tools = list(self.registry.chat_schemas)
         kwargs: dict[str, Any] = {"model": model, "tools": tools}
+        conflicts = self.profile.builtin_search_conflicts_with_thinking
         offer_builtin = (
             bool(self.profile.builtin_search_tool)
             and self.registry.web_search_mode != "off"
             # The vision-switch model is a different family; do not send it
             # builtin tools or thinking flags it may not support.
             and model == self.settings.model
+            and (not conflicts or self._search_phase)
         )
         if offer_builtin:
             tools.append({
                 "type": "builtin_function",
                 "function": {"name": self.profile.builtin_search_tool},
             })
-            if self.profile.builtin_search_conflicts_with_thinking:
+            if conflicts:
                 kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
         return kwargs
 
     def _chat_tools(self) -> list[dict[str, Any]]:
         return self._chat_request_kwargs()["tools"]
+
+    def _should_enter_search_phase(self, name: str) -> bool:
+        """A web_search call while deep thinking is active (on a provider whose
+        builtin search conflicts with thinking) is treated as the SIGNAL that
+        material gathering starts: instead of running the poor local scraper,
+        the run switches to the search phase (thinking paused, builtin enabled)
+        and tells the model to redo the query with the builtin."""
+        return (
+            name == "web_search"
+            and not self._search_phase
+            and bool(self.profile.builtin_search_tool)
+            and self.profile.builtin_search_conflicts_with_thinking
+            and self.registry.web_search_mode != "off"
+        )
+
+    def _enter_search_phase(self, arguments_json: str) -> dict[str, Any]:
+        self._search_phase = True
+        self.audit.record("search_phase_entered")
+        return {
+            "ok": True,
+            "result": {
+                "message": (
+                    "已切换到联网搜索阶段：深度思考临时暂停，provider 自带搜索 "
+                    f"{self.profile.builtin_search_tool} 已加入你的工具列表。"
+                    f"请立即改用 {self.profile.builtin_search_tool} 重新执行这次查询，"
+                    "并用它完成后续所有搜索（本地 web_search 仍可作兜底）。"
+                    "当你结束搜集、开始整理或写作后，深度思考会自动恢复。"
+                ),
+                "original_arguments": arguments_json,
+            },
+        }
+
+    def _exit_search_phase_if_idle(self, round_had_search: bool) -> bool:
+        """Material gathering is over once a tool round passes with zero search
+        calls; restore deep thinking for the analysis/writing rounds."""
+        if self._search_phase and not round_had_search:
+            self._search_phase = False
+            self.audit.record("search_phase_exited")
+            return True
+        return False
 
     def _is_builtin_search_call(self, name: str) -> bool:
         return bool(self.profile.builtin_search_tool) and name == self.profile.builtin_search_tool
@@ -361,6 +415,7 @@ class AgentRuntime:
             raise ValueError("任务不能为空")
         ensure_prompt_is_deidentified(prompt)
         self._refresh_instructions()
+        self._search_phase = False
         self.audit.record(
             "request_started",
             provider=self.settings.provider,
@@ -384,6 +439,7 @@ class AgentRuntime:
             raise ValueError("任务不能为空")
         ensure_prompt_is_deidentified(prompt)
         self._refresh_instructions()
+        self._search_phase = False
         self.audit.record(
             "request_started",
             provider=self.settings.provider,
@@ -502,20 +558,36 @@ class AgentRuntime:
                 self.audit.record("request_finished", response_id=response_id, steps=step + 1)
                 return str(text)
 
+            round_had_search = False
             for call in calls:
                 function = call.function
-                if self._is_builtin_search_call(str(function.name or "")):
+                name = str(function.name or "")
+                if self._is_builtin_search_call(name):
                     # Provider-executed search: echo the arguments back verbatim.
+                    round_had_search = True
                     self.audit.record("builtin_web_search", provider=self.settings.provider)
                     self.messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": call.id,
-                            "name": str(function.name),
+                            "name": name,
                             "content": str(function.arguments or "{}"),
                         }
                     )
                     continue
+                if self._should_enter_search_phase(name):
+                    round_had_search = True
+                    result = self._enter_search_phase(str(function.arguments or "{}"))
+                    self.messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call.id,
+                            "content": json.dumps(result, ensure_ascii=False),
+                        }
+                    )
+                    continue
+                if name == "web_search":
+                    round_had_search = True
                 try:
                     arguments = json.loads(function.arguments)
                     if not isinstance(arguments, dict):
@@ -523,7 +595,7 @@ class AgentRuntime:
                 except (json.JSONDecodeError, ValueError) as exc:
                     result = {"ok": False, "error": str(exc)}
                 else:
-                    result = self.registry.execute(function.name, arguments)
+                    result = self.registry.execute(name, arguments)
                 self.messages.append(
                     {
                         "role": "tool",
@@ -531,6 +603,7 @@ class AgentRuntime:
                         "content": json.dumps(result, ensure_ascii=False),
                     }
                 )
+            self._exit_search_phase_if_idle(round_had_search)
 
         self.audit.record("request_paused", reason="max_steps", max_steps=self.settings.max_steps)
         text = budget_pause_message(self.settings.max_steps)
@@ -662,12 +735,14 @@ class AgentRuntime:
                 assistant_message["content"] = assistant_text
             self.messages.append(assistant_message)
 
+            round_had_search = False
             for call in calls:
                 function = call.get("function") or {}
                 name = str(function.get("name") or "")
                 if self._is_builtin_search_call(name):
                     # Provider-executed search (Kimi $web_search): echo the
                     # arguments back verbatim and let the model do the search.
+                    round_had_search = True
                     self.audit.record("builtin_web_search", provider=self.settings.provider)
                     yield {"type": "activity", "key": "builtin-search", "label": "Kimi 联网搜索中"}
                     self.messages.append(
@@ -679,6 +754,23 @@ class AgentRuntime:
                         }
                     )
                     continue
+                if self._should_enter_search_phase(name):
+                    # The model wants to search while deep thinking is active:
+                    # pause thinking, enable the provider builtin, and ask the
+                    # model to redo the query with it.
+                    round_had_search = True
+                    result = self._enter_search_phase(str(function.get("arguments") or "{}"))
+                    yield {"type": "activity", "key": "search-phase", "label": "暂停思考，切换 Kimi 联网搜索"}
+                    self.messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": str(call.get("id") or ""),
+                            "content": json.dumps(result, ensure_ascii=False),
+                        }
+                    )
+                    continue
+                if name == "web_search":
+                    round_had_search = True
                 try:
                     arguments = json.loads(str(function.get("arguments") or "{}"))
                     if not isinstance(arguments, dict):
@@ -694,6 +786,8 @@ class AgentRuntime:
                         "content": json.dumps(result, ensure_ascii=False),
                     }
                 )
+            if self._exit_search_phase_if_idle(round_had_search):
+                yield {"type": "activity", "key": "search-phase", "label": "素材搜集完成，恢复深度思考"}
 
         self.audit.record("request_paused", reason="max_steps", max_steps=self.settings.max_steps, streaming=True)
         text = budget_pause_message(self.settings.max_steps)

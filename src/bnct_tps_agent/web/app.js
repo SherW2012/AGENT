@@ -319,7 +319,7 @@ function renderWebSearchToggle() {
   const enabled = state.config?.webSearchEnabled !== false;
   elements.webSearchToggle.classList.toggle("on", enabled);
   const engine = state.config?.webSearchEngine === "builtin"
-    ? "Kimi 自带搜索优先，内置搜索兜底；官方限制：搜索开启期间深度思考自动关闭"
+    ? "Kimi 自带搜索优先，内置搜索兜底；搜索期间自动暂停深度思考，搜完自动恢复"
     : "内置搜索";
   elements.webSearchToggle.title = enabled
     ? `联网搜索已开启（${engine}）。点击关闭；与设置页同步。`
