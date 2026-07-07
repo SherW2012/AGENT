@@ -120,6 +120,13 @@ class ProviderAndAgentTests(unittest.TestCase):
         request = completions.requests[0]
         # Same API key, but the request auto-routes to the provider's vision model.
         self.assertEqual(request["model"], "moonshot-v1-32k-vision-preview")
+        # The vision model is a different family: no builtin search tool and no
+        # thinking flag it may not support.
+        self.assertNotIn("extra_body", request)
+        self.assertNotIn(
+            {"type": "builtin_function", "function": {"name": "$web_search"}},
+            request["tools"],
+        )
         user_message = request["messages"][-1]
         self.assertIsInstance(user_message["content"], list)
         kinds = {part["type"] for part in user_message["content"]}
@@ -340,6 +347,10 @@ class ProviderAndAgentTests(unittest.TestCase):
             {"type": "builtin_function", "function": {"name": "$web_search"}},
             offered,
         )
+        # Documented Moonshot limitation: $web_search is unusable while
+        # thinking mode is on, so offering it must disable thinking.
+        self.assertEqual(completions.requests[0]["extra_body"], {"thinking": {"type": "disabled"}})
+        self.assertEqual(completions.requests[1]["extra_body"], {"thinking": {"type": "disabled"}})
         # The echo went back verbatim and the local registry was NOT called.
         tool_message = completions.requests[1]["messages"][-1]
         self.assertEqual(tool_message["role"], "tool")

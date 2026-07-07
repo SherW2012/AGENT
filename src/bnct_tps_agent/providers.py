@@ -26,6 +26,11 @@ class ProviderProfile:
     # executes (Kimi/Moonshot's "$web_search"). None means the provider has no
     # builtin search and the local scraping web_search tool is used instead.
     builtin_search_tool: str | None = None
+    # Documented provider limitation (platform.moonshot.ai/docs/guide/use-web-search):
+    # the builtin search tool is temporarily incompatible with the model's
+    # thinking mode, so requests that offer it must send
+    # {"thinking": {"type": "disabled"}} or the tool is silently unusable.
+    builtin_search_conflicts_with_thinking: bool = False
 
     def resolve_vision_model(self) -> str | None:
         """Vision model for image turns; env var overrides the profile default
@@ -92,6 +97,7 @@ PROVIDERS: dict[str, ProviderProfile] = {
         vision="switch",
         vision_model="moonshot-v1-32k-vision-preview",
         builtin_search_tool="$web_search",
+        builtin_search_conflicts_with_thinking=True,
     ),
 }
 

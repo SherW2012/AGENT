@@ -200,6 +200,12 @@ class AgentRuntime:
                 "missing from your tool list or fails). NEVER tell the user you lack web search "
                 "or that you can only fetch known URLs while this mode is enabled."
             )
+            if self.profile.builtin_search_conflicts_with_thinking:
+                search_capability += (
+                    " Note: while web search is enabled, deep thinking mode is disabled on this "
+                    "provider (a documented provider limitation, not a malfunction); if the user "
+                    "asks, explain that turning web search off restores deep thinking."
+                )
         else:
             search_capability = (
                 "Web search is ENABLED via the web_search tool. NEVER tell the user you lack "
@@ -264,18 +270,38 @@ class AgentRuntime:
             for message in self.messages
         )
 
-    def _chat_tools(self) -> list[dict[str, Any]]:
-        """Tool schemas for chat calls. Providers with builtin search (Kimi's
-        $web_search) get that tool appended when web search is enabled; the
-        model executes the search on the provider side and we only echo the
-        arguments back, per the Moonshot builtin_function contract."""
+    def _chat_request_kwargs(self) -> dict[str, Any]:
+        """model/tools(/extra_body) for chat calls. Providers with builtin
+        search (Kimi's $web_search) get that tool appended when web search is
+        enabled; the model executes the search on the provider side and we only
+        echo the arguments back, per the Moonshot builtin_function contract.
+
+        Documented Moonshot limitation: $web_search is temporarily incompatible
+        with kimi-k2.5/k2.6 thinking mode -- with thinking on (the default) the
+        builtin is silently unusable and the model falls back to the local
+        scraper. So whenever the builtin is offered, the same request disables
+        thinking. Turning web search off restores deep thinking."""
+        model = self._chat_model()
         tools = list(self.registry.chat_schemas)
-        if self.profile.builtin_search_tool and self.registry.web_search_mode != "off":
+        kwargs: dict[str, Any] = {"model": model, "tools": tools}
+        offer_builtin = (
+            bool(self.profile.builtin_search_tool)
+            and self.registry.web_search_mode != "off"
+            # The vision-switch model is a different family; do not send it
+            # builtin tools or thinking flags it may not support.
+            and model == self.settings.model
+        )
+        if offer_builtin:
             tools.append({
                 "type": "builtin_function",
                 "function": {"name": self.profile.builtin_search_tool},
             })
-        return tools
+            if self.profile.builtin_search_conflicts_with_thinking:
+                kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        return kwargs
+
+    def _chat_tools(self) -> list[dict[str, Any]]:
+        return self._chat_request_kwargs()["tools"]
 
     def _is_builtin_search_call(self, name: str) -> bool:
         return bool(self.profile.builtin_search_tool) and name == self.profile.builtin_search_tool
@@ -438,9 +464,8 @@ class AgentRuntime:
         self.messages.append(self._user_message(prompt, images))
         for step in range(self.settings.max_steps):
             completion = self.client.chat.completions.create(
-                model=self._chat_model(),
                 messages=list(self.messages),
-                tools=self._chat_tools(),
+                **self._chat_request_kwargs(),
             )
             self._absorb_usage(getattr(completion, "usage", None))
             message = completion.choices[0].message
@@ -521,11 +546,10 @@ class AgentRuntime:
                 self.messages.append({"role": "user", "content": f"[用户在任务执行中补充的指导，请立即结合执行]\n{note}"})
             try:
                 completion_stream = self.client.chat.completions.create(
-                    model=self._chat_model(),
                     messages=list(self.messages),
-                    tools=self._chat_tools(),
                     stream=True,
                     stream_options={"include_usage": True},
+                    **self._chat_request_kwargs(),
                 )
             except TypeError:
                 self.messages.pop()
