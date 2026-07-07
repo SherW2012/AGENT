@@ -33,7 +33,7 @@ class Settings:
     base_url: str | None
     audit_dir: Path
     data_dir: Path
-    max_steps: int = 12
+    max_steps: int = 32
     interactive: bool = True
     web_search_mode: str = "auto"
     web_search_network: str = "auto"
@@ -61,9 +61,13 @@ class Settings:
         if not resolved_root.is_dir():
             raise ValueError(f"工程目录不存在: {resolved_root}")
 
-        max_steps = int(os.getenv("BNCT_AGENT_MAX_STEPS", "12"))
-        if not 1 <= max_steps <= 50:
-            raise ValueError("BNCT_AGENT_MAX_STEPS 必须在 1 到 50 之间")
+        # Per-turn tool-round budget. Multi-phase agentic skills (research,
+        # build-fix loops) legitimately need dozens of rounds; hitting the
+        # budget PAUSES the run (progress kept, user says 继续) instead of
+        # failing it, so this is a cost checkpoint, not a hard wall.
+        max_steps = int(os.getenv("BNCT_AGENT_MAX_STEPS", "32"))
+        if not 1 <= max_steps <= 120:
+            raise ValueError("BNCT_AGENT_MAX_STEPS 必须在 1 到 120 之间")
 
         profile = get_provider(provider or os.getenv("BNCT_AGENT_PROVIDER", "deepseek"))
         provider_model_env = f"BNCT_AGENT_{profile.id.upper()}_MODEL"

@@ -128,6 +128,19 @@ def ensure_prompt_is_deidentified(prompt: str) -> None:
             raise ValueError("任务中疑似包含患者直接标识符，请先脱敏后再提交")
 
 
+def budget_pause_message(max_steps: int) -> str:
+    """Shown when a turn exhausts its tool-round budget. The budget is a cost
+    CHECKPOINT, not a failure: all progress (written files, gathered results,
+    conversation state) is kept, and replying 继续 resumes right where the run
+    paused. Long multi-phase skills legitimately need several checkpoints."""
+    return (
+        f"已达到单轮工具调用步数上限（{max_steps} 步），为控制 token 消耗先在此暂停。"
+        "之前的进度（已写入的文件、已取得的结果）全部保留。"
+        "回复「继续」即可从当前位置接着执行；也可以顺便补充新的指示，"
+        "或调整环境变量 BNCT_AGENT_MAX_STEPS 提高单轮上限。"
+    )
+
+
 def _field(value: Any, name: str, default: Any = None) -> Any:
     if isinstance(value, dict):
         return value.get(name, default)
@@ -457,8 +470,9 @@ class AgentRuntime:
                 tools=self.registry.schemas,
             )
 
-        self.audit.record("request_stopped", reason="max_steps", max_steps=self.settings.max_steps)
-        raise RuntimeError("超过最大工具调用轮数，已停止以避免失控循环")
+        self.audit.record("request_paused", reason="max_steps", max_steps=self.settings.max_steps)
+        self.previous_response_id = response.id
+        return budget_pause_message(self.settings.max_steps)
 
     def _run_chat_completions(self, prompt: str, images: list[str] | None = None) -> str:
         self.messages.append(self._user_message(prompt, images))
@@ -518,8 +532,10 @@ class AgentRuntime:
                     }
                 )
 
-        self.audit.record("request_stopped", reason="max_steps", max_steps=self.settings.max_steps)
-        raise RuntimeError("超过最大工具调用轮数，已停止以避免失控循环")
+        self.audit.record("request_paused", reason="max_steps", max_steps=self.settings.max_steps)
+        text = budget_pause_message(self.settings.max_steps)
+        self.messages.append({"role": "assistant", "content": text})
+        return text
 
     def _run_chat_completions_events(
         self,
@@ -679,5 +695,9 @@ class AgentRuntime:
                     }
                 )
 
-        self.audit.record("request_stopped", reason="max_steps", max_steps=self.settings.max_steps, streaming=True)
-        raise RuntimeError("超过最大工具调用轮数，已停止以避免失控循环")
+        self.audit.record("request_paused", reason="max_steps", max_steps=self.settings.max_steps, streaming=True)
+        text = budget_pause_message(self.settings.max_steps)
+        self.messages.append({"role": "assistant", "content": text})
+        # Keep the pause visible in the live stream too (own paragraph).
+        yield {"type": "delta", "text": ("\n\n" if emitted_text_before else "") + text}
+        return text

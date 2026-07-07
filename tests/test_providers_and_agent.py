@@ -378,6 +378,51 @@ class ProviderAndAgentTests(unittest.TestCase):
             registry_on.chat_schemas,
         )
 
+    def test_step_budget_pauses_gracefully_and_can_continue(self):
+        # Long agentic skills hit the per-turn round budget mid-flight. That
+        # must PAUSE the run (progress + conversation state kept, user replies
+        # 继续) -- never raise and discard everything as a failure.
+        def tool_round():
+            return [SimpleNamespace(
+                id="r",
+                choices=[SimpleNamespace(
+                    delta=SimpleNamespace(
+                        content=None,
+                        tool_calls=[SimpleNamespace(
+                            index=0,
+                            id="call-x",
+                            type="function",
+                            function=SimpleNamespace(name="list_project_files", arguments='{"pattern":"*","limit":3}'),
+                        )],
+                    ),
+                    finish_reason="tool_calls",
+                )],
+            )]
+
+        with patch.dict("os.environ", {"BNCT_AGENT_MAX_STEPS": "2"}, clear=False):
+            settings = Settings.load(self.root, provider="deepseek", api_key="test-key")
+        final_round = [
+            SimpleNamespace(id="r", choices=[SimpleNamespace(delta=SimpleNamespace(content="继续完成了"), finish_reason="stop")]),
+        ]
+        completions = FakeStreamingCompletions([tool_round(), tool_round(), final_round])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        registry = FakeRegistry()
+        audit = AuditLogger(self.root / "tests" / "runtime_output" / "budget-audit")
+        runtime = AgentRuntime(settings, registry, audit, client=client)
+
+        events = list(runtime.run_events("做一个超长的调研"))
+        answer = events[-1]["answer"]
+        self.assertIn("暂停", answer)
+        self.assertIn("继续", answer)
+        # The transcript stays consistent: the pause is a normal assistant turn.
+        self.assertEqual(runtime.messages[-1]["role"], "assistant")
+        self.assertIn("暂停", runtime.messages[-1]["content"])
+        # Two tool rounds actually ran before pausing.
+        self.assertEqual(len(registry.calls), 2)
+        # And the conversation can resume in the same runtime.
+        events = list(runtime.run_events("继续"))
+        self.assertEqual(events[-1]["answer"], "继续完成了")
+
     def test_mid_task_steering_is_injected_before_next_round(self):
         round_one = [
             SimpleNamespace(
