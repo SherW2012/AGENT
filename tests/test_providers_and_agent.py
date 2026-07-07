@@ -290,6 +290,12 @@ class ProviderAndAgentTests(unittest.TestCase):
         self.assertEqual(system_message["role"], "system")
         self.assertIn(_time.strftime("%Y-%m-%d"), system_message["content"])
         self.assertIn("training data has a cutoff", system_message["content"])
+        # Kimi runs must be told, in plain words, that they HAVE web search
+        # (builtin preferred, local fallback) -- otherwise the model looks at
+        # the exotic $web_search declaration and denies having search at all.
+        self.assertIn("you HAVE it", system_message["content"])
+        self.assertIn("$web_search", system_message["content"])
+        self.assertIn("NEVER tell the user you lack web search", system_message["content"])
         # A cached runtime must refresh the date on the NEXT run too (sessions
         # stay cached across midnight): simulate staleness and re-run.
         runtime.messages[0] = {"role": "system", "content": "STALE"}

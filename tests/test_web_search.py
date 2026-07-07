@@ -211,9 +211,11 @@ class WebSearchTests(unittest.TestCase):
         )
         self.assertIn("fetch_url", {schema["name"] for schema in registry.schemas})
 
-    def test_builtin_provider_search_replaces_local_web_search_tool(self):
-        # Kimi searches on the provider side: the local scraping tool would be
-        # redundant/worse, so it is dropped while fetch_url stays.
+    def test_local_web_search_stays_as_fallback_beside_builtin(self):
+        # Capability must never depend on the model recognizing the exotic
+        # $web_search builtin declaration: with search enabled, a tool named
+        # web_search is ALWAYS in the list (described as the fallback), so the
+        # model can never truthfully claim it lacks web search.
         registry = ToolRegistry(
             self.root,
             SafetyPolicy(),
@@ -222,8 +224,11 @@ class WebSearchTests(unittest.TestCase):
             builtin_search=True,
         )
         names = {schema["name"] for schema in registry.schemas}
-        self.assertNotIn("web_search", names)
+        self.assertIn("web_search", names)
         self.assertIn("fetch_url", names)
+        description = next(s for s in registry.schemas if s["name"] == "web_search")["description"]
+        self.assertIn("$web_search", description)
+        self.assertIn("fallback", description)
 
     def test_sensitive_auto_search_requires_approval(self):
         registry = ToolRegistry(

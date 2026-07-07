@@ -81,9 +81,11 @@ Skill behavior:
 
 Web search behavior:
 - If web search is enabled and a question depends on external public facts you
-  are unsure about, use web_search unless the user explicitly asks you to stay
-  offline. You decide whether the question needs the web by reading it; there is
-  no fixed keyword list.
+  are unsure about, search unless the user explicitly asks you to stay offline.
+  "Search" means whichever search tool your tool list carries this turn -- the
+  provider builtin (e.g. $web_search) when present, otherwise the web_search
+  function. You decide whether the question needs the web by reading it; there
+  is no fixed keyword list.
 - Pass the query to web_search as a complete, natural-language phrase, exactly
   as a person would type it. Never break a sentence into individual words or
   single characters, and do not strip it down to disconnected keywords -- the
@@ -183,10 +185,31 @@ class AgentRuntime:
         )
         # Read the LIVE mode from the registry, not the frozen settings: the
         # quick toggle flips it in place without rebuilding runtimes.
+        mode = self.registry.web_search_mode
+        if mode == "off":
+            search_capability = (
+                "Web search is currently DISABLED by the user; no search tools are available. "
+                "If a question needs fresh public information, say the user can enable web "
+                "search with the toggle above the input box."
+            )
+        elif self.profile.builtin_search_tool:
+            search_capability = (
+                "Web search is ENABLED and you HAVE it, through two tools: the provider builtin "
+                f"{self.profile.builtin_search_tool} (PREFERRED -- executed on the provider side, "
+                "best quality) and the local web_search function (fallback if the builtin is "
+                "missing from your tool list or fails). NEVER tell the user you lack web search "
+                "or that you can only fetch known URLs while this mode is enabled."
+            )
+        else:
+            search_capability = (
+                "Web search is ENABLED via the web_search tool. NEVER tell the user you lack "
+                "web search while this mode is enabled."
+            )
         web_search_context = (
-            f"Current web search mode: {self.registry.web_search_mode}. "
+            f"Current web search mode: {mode}. "
             f"Current web search network path: {self.registry.web_search_network}. "
-            "Modes are auto, ask, and off; network paths are auto, direct, and system."
+            "Modes are auto, ask, and off; network paths are auto, direct, and system. "
+            + search_capability
         )
         parts = [SYSTEM_INSTRUCTIONS, time_context, web_search_context]
         if memory_context:

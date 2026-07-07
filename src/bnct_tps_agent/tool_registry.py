@@ -97,9 +97,13 @@ class ToolRegistry:
         self.web_search_network = web_search_network
         self.search_provider = search_provider
         self.search_api_key = search_api_key
-        # When the model provider has its own builtin web search (Kimi), the
-        # local scraping web_search tool is redundant and worse -- skip it.
-        # fetch_url (explicit URL) stays available either way.
+        # When the model provider has its own builtin web search (Kimi), that
+        # channel is preferred -- but the local web_search tool STAYS in the
+        # list as a fallback. Capability must never depend on the model
+        # recognizing an exotic builtin declaration: if the only search tool
+        # is "$web_search" the model can conclude it has no search at all and
+        # tell the user so, which is worse than an occasional lower-quality
+        # search. builtin_search only tweaks the tool description.
         self.builtin_search = builtin_search
         self._tools = {tool.name: tool for tool in self._build_tools()}
 
@@ -478,7 +482,7 @@ class ToolRegistry:
                     risk_resolver=self._fetch_url_risk,
                 )
             )
-        if self.web_search_mode != "off" and not self.builtin_search:
+        if self.web_search_mode != "off":
             tools.append(
                 Tool(
                     "web_search",
@@ -490,6 +494,11 @@ class ToolRegistry:
                         "dates, latest standards) so that fresh news sources are consulted first; "
                         "set recency=false for stable knowledge. Never include patient identifiers, "
                         "secrets, internal paths, or private code in the query."
+                        + (
+                            " NOTE: your provider also offers the builtin $web_search tool; prefer "
+                            "that when present and use this local web_search as the fallback."
+                            if self.builtin_search else ""
+                        )
                     ),
                     {
                         **object_schema,
