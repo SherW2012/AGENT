@@ -1676,3 +1676,31 @@ svg {
   box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.1);
 }
 .panel-form-error { margin: 0 0 10px; color: var(--red); font-size: 12.5px; }
+
+/* ---- 搜索自检报告（doctor） ---- */
+.search-doctor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 12px;
+  background: var(--tint);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  font-size: 12px;
+}
+.doctor-summary { font-weight: 680; }
+.doctor-summary.ok { color: var(--green); }
+.doctor-summary.bad { color: var(--red); }
+.doctor-row { display: flex; align-items: baseline; gap: 8px; color: var(--text-soft); }
+.doctor-row strong { flex: 0 0 auto; font-weight: 640; color: var(--text); }
+.doctor-row span:last-child { min-width: 0; overflow-wrap: anywhere; color: var(--muted); }
+.doctor-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  align-self: center;
+  border-radius: 50%;
+}
+.doctor-dot.ok { background: var(--green); }
+.doctor-dot.bad { background: var(--red); }

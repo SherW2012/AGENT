@@ -33,6 +33,7 @@ from .personal import (
 )
 from .project_tools import list_project_files, read_project_text
 from .providers import get_provider, public_provider_configs
+from .web_search import search_self_test
 from .safety import Risk, SafetyPolicy
 from .sessions import SessionStore
 from .skills import SkillRegistry
@@ -1095,6 +1096,13 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(self.server.state.clear_auto_memory())
             elif parsed.path == "/api/web-search":
                 self._send_json(self.server.state.set_web_search_enabled(bool(payload.get("enabled"))))
+            elif parsed.path == "/api/web-search/self-test":
+                settings = self.server.state.settings
+                self._send_json(search_self_test(
+                    network=settings.web_search_network,
+                    search_provider=settings.search_provider,
+                    search_api_key=settings.search_api_key,
+                ))
             elif parsed.path == "/api/personal/add-event":
                 self._send_json(add_calendar_entry(
                     self.server.state.data_dir,

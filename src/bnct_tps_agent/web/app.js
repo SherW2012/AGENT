@@ -148,6 +148,8 @@ const elements = {
   panelFormSubmit: document.querySelector("#panel-form-submit"),
   closePanelForm: document.querySelector("#close-panel-form"),
   themeInputs: document.querySelectorAll('input[name="theme"]'),
+  searchSelfTest: document.querySelector("#search-self-test-button"),
+  searchDoctor: document.querySelector("#search-doctor"),
 };
 
 async function api(path, options = {}) {
@@ -2569,6 +2571,45 @@ async function resolveApproval(approved, always) {
   }
 }
 
+async function runSearchSelfTest() {
+  const box = elements.searchDoctor;
+  box.classList.remove("hidden");
+  box.replaceChildren();
+  const status = document.createElement("div");
+  status.className = "doctor-row";
+  status.textContent = "正在逐通道检测（约 10-30 秒）…";
+  box.append(status);
+  elements.searchSelfTest.disabled = true;
+  try {
+    const report = await api("/api/web-search/self-test", { method: "POST", body: "{}" });
+    box.replaceChildren();
+    const summary = document.createElement("div");
+    summary.className = `doctor-summary ${report.healthy ? "ok" : "bad"}`;
+    summary.textContent = report.summary || "";
+    box.append(summary);
+    (report.checks || []).forEach((check) => {
+      const row = document.createElement("div");
+      row.className = "doctor-row";
+      const dot = document.createElement("span");
+      dot.className = `doctor-dot ${check.ok ? "ok" : "bad"}`;
+      const name = document.createElement("strong");
+      name.textContent = check.channel;
+      const detail = document.createElement("span");
+      detail.textContent = check.detail;
+      row.append(dot, name, detail);
+      box.append(row);
+    });
+  } catch (error) {
+    box.replaceChildren();
+    const failed = document.createElement("div");
+    failed.className = "doctor-summary bad";
+    failed.textContent = `自检失败：${error.message}`;
+    box.append(failed);
+  } finally {
+    elements.searchSelfTest.disabled = false;
+  }
+}
+
 function renderUsageTotals() {
   const totals = state.config?.usageTotals;
   if (!totals) return;
@@ -2875,6 +2916,7 @@ function bindEvents() {
   elements.themeInputs.forEach((input) => input.addEventListener("change", () => {
     if (input.checked) setThemePreference(input.value);
   }));
+  elements.searchSelfTest.addEventListener("click", runSearchSelfTest);
   elements.sidebarToggle.addEventListener("click", () => toggleSidebar(true));
   elements.sidebarExpand.addEventListener("click", () => toggleSidebar(false));
   document.querySelectorAll("[data-task]").forEach((button) => {

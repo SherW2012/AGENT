@@ -321,6 +321,10 @@
                 <span><strong>开启联网搜索</strong><small>需要最新公开信息时由模型自动判断是否搜索；对话框上方有同款快捷开关。</small></span>
               </label>
               <p class="settings-help" id="web-search-engine-help">搜索通道由所选模型决定：使用 Kimi 时优先走 Kimi 模型自带的联网搜索（效果最好，按 Kimi 平台计费），内置搜索作为兜底始终可用；使用 DeepSeek 等无自带搜索的模型时走内置搜索。注意：Kimi 官方限制其自带搜索与深度思考不能同时生效，Agent 会自动权衡——平时保持深度思考，需要搜索时临时暂停思考、切到 Kimi 自带搜索，素材搜集完成后自动恢复思考（活动面板会显示切换过程）。用户明确要求不联网时，Agent 会遵循指令。</p>
+              <div class="memory-actions">
+                <button class="secondary-button" id="search-self-test-button" type="button">搜索自检</button>
+              </div>
+              <div class="search-doctor hidden" id="search-doctor" aria-live="polite"></div>
             </section>
 
             <section class="settings-section" data-settings-section-panel="appearance">

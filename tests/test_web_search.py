@@ -67,6 +67,11 @@ BING = """
 class WebSearchTests(unittest.TestCase):
     root = Path(__file__).resolve().parents[1]
 
+    def setUp(self):
+        # Search results are TTL-cached in-process; tests must stay isolated.
+        from bnct_tps_agent import web_search as ws
+        ws._SEARCH_CACHE.clear()
+
     def test_duckduckgo_html_results_are_parsed(self):
         results = parse_duckduckgo_html(HTML, 3)
         self.assertEqual(results[0]["title"], "BNCT latest review")
@@ -135,15 +140,85 @@ class WebSearchTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["url"], "https://example.com/frontier-tech")
 
     def test_web_search_query_is_not_split_into_fragments(self):
-        # A natural-language CJK question must reach the engine verbatim, and a
-        # Bing result must be returned as-is without keyword post-filtering.
-        with patch("bnct_tps_agent.web_search._fetch_text", return_value=BING) as fetch_text:
+        # A natural-language CJK question must reach the engine verbatim.
+        bing_relevant = """
+        <html><body>
+        <li class="b_algo">
+          <h2><a href="https://example.net/bnct">硼中子俘获治疗临床进展综述</a></h2>
+          <p>最新临床研究与试验进展。</p>
+        </li>
+        </body></html>
+        """
+        with patch("bnct_tps_agent.web_search._fetch_text", return_value=bing_relevant) as fetch_text:
             result = web_search(self.root, "硼中子俘获治疗的最新临床进展是什么", max_results=3)
         # First source consulted is bing-html with the full query in the URL.
         first_url = fetch_text.call_args_list[0].args[0]
         self.assertIn("bing.com/search", first_url)
         self.assertEqual(result["source"], "bing-html")
-        self.assertEqual(result["results"][0]["url"], "https://example.net/news")
+        self.assertEqual(result["results"][0]["url"], "https://example.net/bnct")
+
+    def test_anti_bot_garbage_results_are_treated_as_channel_failure(self):
+        # A blocked engine often "answers" with unrelated cards (restaurants,
+        # appliances, weather). Sharing zero material with the query must count
+        # as an ENGINE failure with explicit diagnostics -- never as success.
+        garbage = """
+        <html><body>
+        <li class="b_algo"><h2><a href="https://example.com/food">城中十家人气餐厅推荐</a></h2><p>美食攻略。</p></li>
+        <li class="b_algo"><h2><a href="https://example.com/wash">滚筒洗衣机选购指南</a></h2><p>家电评测。</p></li>
+        </body></html>
+        """
+        with patch("bnct_tps_agent.web_search._fetch_text", return_value=garbage):
+            result = web_search(self.root, "BNCT GPU 蒙特卡罗剂量计算 加速算法", max_results=3)
+        self.assertEqual(result["results"], [])
+        self.assertEqual(result["source"], "none")
+        self.assertTrue(any(d["errorType"] == "IrrelevantResults" for d in result["diagnostics"]))
+        # The tool tells the model to report honestly instead of retry-looping.
+        self.assertIn("不要反复更换关键词", result["message"])
+
+    def test_mixed_language_results_pass_the_relevance_gate(self):
+        # A Chinese query answered by English results still passes when the
+        # query's latin tokens (BNCT, GPU) appear -- the gate must be lenient.
+        english = """
+        <html><body>
+        <li class="b_algo"><h2><a href="https://example.com/gmcc">GPU-accelerated Monte Carlo for BNCT dose</a></h2><p>Nuclear engineering paper.</p></li>
+        </body></html>
+        """
+        with patch("bnct_tps_agent.web_search._fetch_text", return_value=english):
+            result = web_search(self.root, "BNCT 和 GPU 相结合的应用算法", max_results=3)
+        self.assertEqual(len(result["results"]), 1)
+        self.assertEqual(result["source"], "bing-html")
+
+    def test_successful_searches_are_cached(self):
+        with patch("bnct_tps_agent.web_search._open_url", return_value=FakeResponse(HTML)) as open_url:
+            first = web_search(self.root, "latest BNCT paper cached", max_results=1)
+            calls_after_first = open_url.call_count
+            second = web_search(self.root, "latest BNCT paper cached", max_results=1)
+        self.assertEqual(open_url.call_count, calls_after_first)
+        self.assertNotIn("cached", first)
+        self.assertTrue(second["cached"])
+        self.assertEqual(second["results"], first["results"])
+
+    def test_search_self_test_reports_per_channel_verdicts(self):
+        from bnct_tps_agent.web_search import search_self_test
+
+        relevant = """
+        <html><body>
+        <li class="b_algo"><h2><a href="https://example.com/bnct">Boron neutron capture therapy overview</a></h2><p>BNCT basics.</p></li>
+        </body></html>
+        """
+
+        def fake_fetch(url, timeout=8, network="auto"):
+            if "bing.com/search" in url:
+                return relevant
+            raise OSError("blocked")
+
+        with patch("bnct_tps_agent.web_search._fetch_text", side_effect=fake_fetch):
+            report = search_self_test(network="auto")
+        self.assertTrue(report["healthy"])
+        by_channel = {check["channel"]: check for check in report["checks"]}
+        self.assertTrue(by_channel["bing-html"]["ok"])
+        self.assertFalse(by_channel["duckduckgo-html"]["ok"])
+        self.assertIn("无法访问", by_channel["duckduckgo-html"]["detail"])
 
     def test_search_api_provider_is_used_when_configured(self):
         bocha_payload = {

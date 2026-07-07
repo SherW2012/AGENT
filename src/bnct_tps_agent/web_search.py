@@ -519,6 +519,133 @@ def _parse_results(source: str, body: str, limit: int) -> list[dict[str, str]]:
     return parse_duckduckgo_html(body, limit)
 
 
+_CJK_RUN_RE = re.compile(r"[一-鿿]+")
+_LATIN_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9.+-]{1,}")
+
+
+def _query_evidence(query: str) -> tuple[set[str], set[str]]:
+    """Deterministic evidence tokens for the relevance gate: latin words and
+    CJK character bigrams from the query. This is NOT intent guessing -- it is
+    a quality boundary, like the sensitive-content patterns: results that share
+    zero material with the query are anti-bot/consent-page garbage, and passing
+    them to the model as \"search results\" sends it into retry spirals."""
+    lowered = str(query).lower()
+    latin = set(_LATIN_TOKEN_RE.findall(lowered))
+    bigrams: set[str] = set()
+    for run in _CJK_RUN_RE.findall(lowered):
+        if len(run) == 1:
+            bigrams.add(run)
+        for index in range(len(run) - 1):
+            bigrams.add(run[index : index + 2])
+    return latin, bigrams
+
+
+def _result_supported_by_query(result: dict[str, str], latin: set[str], bigrams: set[str]) -> bool:
+    if not latin and not bigrams:
+        return True
+    text = f"{result.get('title', '')} {result.get('snippet', '')} {result.get('url', '')}".lower()
+    if any(token in text for token in latin):
+        return True
+    return any(bigram in text for bigram in bigrams)
+
+
+def _filter_relevant(results: list[dict[str, str]], query: str) -> list[dict[str, str]]:
+    latin, bigrams = _query_evidence(query)
+    return [item for item in results if _result_supported_by_query(item, latin, bigrams)]
+
+
+# Small in-process TTL cache: repeated/near-retry searches (the model often
+# re-queries mid-task) must not hammer the engines or trip anti-bot faster.
+_SEARCH_CACHE: dict[tuple[str, bool, int], tuple[float, dict[str, Any]]] = {}
+_SEARCH_CACHE_TTL_SECONDS = 900
+_SEARCH_CACHE_MAX_ENTRIES = 32
+
+
+def _cache_get(key: tuple[str, bool, int]) -> dict[str, Any] | None:
+    entry = _SEARCH_CACHE.get(key)
+    if entry is None or time.time() - entry[0] > _SEARCH_CACHE_TTL_SECONDS:
+        return None
+    return {**entry[1], "cached": True}
+
+
+def _cache_put(key: tuple[str, bool, int], payload: dict[str, Any]) -> None:
+    if len(_SEARCH_CACHE) >= _SEARCH_CACHE_MAX_ENTRIES:
+        oldest = min(_SEARCH_CACHE, key=lambda item: _SEARCH_CACHE[item][0])
+        _SEARCH_CACHE.pop(oldest, None)
+    _SEARCH_CACHE[key] = (time.time(), payload)
+
+
+def search_self_test(
+    network: str = "auto",
+    search_provider: str = "none",
+    search_api_key: str | None = None,
+) -> dict[str, Any]:
+    """One-click observability for the whole search pipeline (the claw-doctor
+    idea): run a fixed diagnostic query through every channel and report each
+    stage -- reachable? parsed? relevant? -- so "搜索效果差" turns into a
+    concrete per-channel verdict instead of a mystery."""
+    query = "boron neutron capture therapy BNCT"
+    network = str(network or "auto").strip().lower()
+    if network not in WEB_SEARCH_NETWORKS:
+        network = "auto"
+    checks: list[dict[str, Any]] = []
+
+    provider = str(search_provider or "none").strip().lower()
+    if provider in SEARCH_API_PROVIDERS and provider != "none" and search_api_key:
+        try:
+            api_results = _search_via_api(provider, search_api_key, query, 3, False, network)
+            checks.append({
+                "channel": f"搜索 API（{provider}）",
+                "ok": bool(api_results),
+                "detail": f"返回 {len(api_results)} 条结果" if api_results else "连通但没有结果",
+            })
+        except Exception as exc:
+            checks.append({
+                "channel": f"搜索 API（{provider}）",
+                "ok": False,
+                "detail": f"{type(exc).__name__}: {str(exc)[:200]}",
+            })
+
+    for source, url in _search_sources(query, False):
+        try:
+            body = _fetch_text(url, timeout=8, network=network)
+        except OSError as exc:
+            checks.append({"channel": source, "ok": False, "detail": f"无法访问：{str(exc)[:200]}"})
+            continue
+        parsed = _parse_results(source, body, 5)
+        if not parsed:
+            checks.append({"channel": source, "ok": False, "detail": "可访问，但解析不到任何结果（页面结构变化或验证页）"})
+            continue
+        relevant = _filter_relevant(parsed, query)
+        if not relevant:
+            checks.append({
+                "channel": source,
+                "ok": False,
+                "detail": f"解析到 {len(parsed)} 条，但全部与测试查询无关（疑似被风控）",
+            })
+            continue
+        sample = relevant[0].get("title", "")[:60]
+        checks.append({
+            "channel": source,
+            "ok": True,
+            "detail": f"正常：{len(relevant)}/{len(parsed)} 条相关（示例：{sample}）",
+        })
+
+    healthy = any(check["ok"] for check in checks)
+    return {
+        "query": query,
+        "network": network,
+        "checkedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "healthy": healthy,
+        "checks": checks,
+        "summary": (
+            "至少一个搜索通道工作正常。"
+            if healthy
+            else "所有本地搜索通道都不可用（Kimi 自带搜索不受影响，它在 Kimi 服务端执行）。"
+        ),
+    }
+
+
 def web_search(
     _root: Path,
     query: str,
@@ -542,6 +669,11 @@ def web_search(
     if network not in WEB_SEARCH_NETWORKS:
         network = "auto"
     recency = bool(recency)
+
+    cache_key = (clean_query, recency, limit)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
 
     diagnostics = []
     results: list[dict[str, str]] = []
@@ -568,19 +700,45 @@ def web_search(
         except OSError as exc:
             diagnostics.append({"source": source, "network": network, "errorType": type(exc).__name__, "message": str(exc)[:420]})
             continue
-        # Trust the engine's own ranking; we only de-duplicate inside the
-        # parsers. We never post-filter by chopping the query into fragments.
-        results = _parse_results(source, body, limit)
-        if results:
-            source_used = source
-            break
+        parsed = _parse_results(source, body, limit)
+        if not parsed:
+            continue
+        # Anti-slop gate: an engine that "answers" with content sharing zero
+        # material with the query served an anti-bot/consent page, not results.
+        # Treating that as success is what sent the model into keyword-retry
+        # spirals; count it as an ENGINE FAILURE and move on.
+        results = _filter_relevant(parsed, clean_query)
+        if not results:
+            diagnostics.append({
+                "source": source,
+                "network": network,
+                "errorType": "IrrelevantResults",
+                "message": f"解析到 {len(parsed)} 条结果但内容与查询无关（疑似被风控或返回验证页），已按通道失败处理",
+            })
+            continue
+        source_used = source
+        break
 
-    return {
+    if results:
+        message = (
+            f"获得 {len(results)} 条相关结果（来源 {source_used}）。引用时给出来源标题和 URL。"
+        )
+    else:
+        message = (
+            "所有搜索通道当前均不可用或只返回无关内容（多为免费通道被风控）。"
+            "请如实告知用户联网搜索暂时不可用，不要反复更换关键词重试；"
+            "可建议用户稍后再试、在设置里查看搜索自检，或配置正规搜索 API。"
+        )
+    payload = {
         "query": clean_query,
         "recency": recency,
         "source": source_used or "none",
         "network": network,
         "searchedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
         "results": results,
-        "diagnostics": [] if results else diagnostics[-3:],
+        "message": message,
+        "diagnostics": [] if results else diagnostics[-4:],
     }
+    if results:
+        _cache_put(cache_key, payload)
+    return payload
